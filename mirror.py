@@ -7,9 +7,9 @@ PROJECT_NAME = 'Magic Mirror'
 # region Argument Parsing
 
 parser = argparse.ArgumentParser(
-    prog=f'{PROJECT_NAME}',
+    prog=f'python mirror.py',
     description='Magic Mirror prop used for Lockwood Immersive\'s HES Ball 2025 integration.',
-    epilog='Created by Than')
+    epilog='Created by Than | https://github.com/thana-than/LockwoodImmersiveMagicMirror')
 parser.add_argument('-c', '--camera', default=0, help='Index of camera device. Default is 0 (the default camera device).')
 parser.add_argument('-d', '--debug', action='store_true', default=False, help='Shows debug frame and detection state. Defaults to False.')
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
