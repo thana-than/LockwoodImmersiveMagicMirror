@@ -37,10 +37,11 @@ python mirror.py --debug
    ```
    python mirror.py [-h] [-c CAMERA] [-d] [-f FPS]
 
-  -h, --help                    Shows this help message.
-  -c CAMERA, --camera CAMERA    Index of camera device. Default is 0 (the default camera device).
-  -d, --debug                   Shows debug frame and detection state. Defaults to False.
-  -f FPS, --fps FPS             Set the desired Frames Per Second. Defaults to 30.
+  -h, --help                                Shows this help message.
+  -c CAMERA, --camera CAMERA                Index of camera device. Default is 0 (the default camera device).
+  -d, --debug                               Shows debug frame and detection state. Defaults to False.
+  -f FPS, --fps FPS                         Set the desired Frames Per Second. Defaults to 30.
+  -w WIDTH HEIGHT, --window WIDTH HEIGHT    Set the desired Window Size. Defaults to 1920 1080.
    ```
 ## Contact
 
@@ -60,5 +61,6 @@ Distributed under the MIT License. See `LICENSE.txt` for more information.
 
 * [Python](https://www.python.org/)
 * [OpenCV](https://opencv.org/)
+* [Pillow](https://pillow.readthedocs.io/)
 * [Debug Clock Icon](https://www.flaticon.com/free-icon/clock_2838590?term=clock&page=1&position=32&origin=search&related_id=2838590)
 * [Debug Checkmark Icon](https://www.flaticon.com/free-icon/check_14090371?term=check+mark&page=1&position=6&origin=tag&related_id=14090371)
