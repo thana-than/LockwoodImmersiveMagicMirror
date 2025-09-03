@@ -274,7 +274,10 @@ class CV2_Detection(CV2_Render):
         elif (detect_step > 0): # charging up
             video_frame = debug_draw_overlay(clock_overlay, video_frame)
 
-        return super().post_process_frame(video_frame)
+        if DEBUG:
+            return super().post_process_frame(video_frame)
+        else:
+            return None # hide frame if not debugging
     
 # endregion
 
