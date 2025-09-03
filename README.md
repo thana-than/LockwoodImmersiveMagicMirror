@@ -57,7 +57,8 @@ Distributed under the MIT License. See `LICENSE.txt` for more information.
 ## Acknowledgments
 
 * [Python](https://www.python.org/)
-* [OpenCV](https://opencv.org/)
-* [Pillow](https://pillow.readthedocs.io/)
+* [NumPy](https://pypi.org/project/numpy/)
+* [OpenCV](https://pypi.org/project/opencv_python/)
+* [Pillow](https://pypi.org/project/Pillow/)
 * [Debug Clock Icon](https://www.flaticon.com/free-icon/clock_2838590?term=clock&page=1&position=32&origin=search&related_id=2838590)
 * [Debug Checkmark Icon](https://www.flaticon.com/free-icon/check_14090371?term=check+mark&page=1&position=6&origin=tag&related_id=14090371)

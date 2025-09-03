@@ -5,6 +5,12 @@ import tkinter
 import threading
 from PIL import Image, ImageTk
 from queue import SimpleQueue, Empty
+import numpy
+
+#TODO cleaner call for video overlay (currently in on_face_state_change)
+#TODO item detection model
+#TODO render scaling
+#TODO video position and scaling based on position of object (?) (probably wont work with mirror surface perspective)
 
 PROJECT_NAME = 'Magic Mirror'
 
@@ -38,15 +44,40 @@ VIDEO_SCALE_FACTOR = 1.1 # reduce image size for optimization (1 / VIDEO_SCALE_F
 clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
 check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
 
+overlay_video_filename = 'res/test_transparent.mp4'
+overlay_video_colorkey = '#00FF00'
+
 ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
 
 face_classifier = cv2.CascadeClassifier(
     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 )
 
+app = None
+
 # endregion
 
 # region Methods
+
+def hex_to_hsv_bounds(hex_color, threshold=40):
+    hex_color = hex_color.lstrip('#')
+    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    rgb_np = numpy.uint8([[rgb]])
+    hsv = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2HSV)[0][0]
+
+    h, s, v = [int(x) for x in hsv]
+    lower = numpy.array([
+        max(h - threshold, 0),
+        max(s - threshold, 0),
+        max(v - threshold, 0)
+    ])
+    upper = numpy.array([
+        min(h + threshold, 179),
+        min(s + threshold, 255),
+        min(v + threshold, 255)
+    ])
+    return lower, upper
+
 def detect_bounding_box(video_frame, classifier):
     gray_image = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY) # Greyscale for optimized detection
     faces = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
@@ -56,6 +87,11 @@ def face_detected_update(video_frame, faces):
     return video_frame
 
 def on_face_state_change(face_state):
+    #TODO put this somewhere cleaner
+    if (face_state):
+        video = CV2_Render(overlay_video_filename)
+        video.set_color_key(overlay_video_colorkey)
+        app.add(video)
     return
 
 def debug_draw_detection(video_frame, faces):
@@ -96,65 +132,117 @@ def debug_draw_overlay(overlay_image, video_frame):
 
     return video_frame
 
-def wait_process_frame(queue, video_frame):
-    while not queue.empty():
-        try: queue.get_nowait()
-        except Empty: break
-    video_frame = cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB) # Convert BGR to RGB for Tkinter
-    queue.put(video_frame)
-
 def clamp(n, smallest, largest): return max(smallest, min(n, largest)) 
 
 # endregion
 
 # region Render Thread Classes
 
-class VideoRender(threading.Thread):
-    def __init__(self, source):
+class Video_Render(threading.Thread):
+    def __init__(self, source, x = 0, y = 0):
         super().__init__()
-        self.source = source
         self.stop_event = None
+        self.source = source
         self.queue = SimpleQueue()
-        self.img_id = None
-        self.img = None
-        self.video_capture = cv2.VideoCapture(self.source)
+        self.active = True
         self.personal_stop_event = threading.Event()
+        self.x = x
+        self.y = y
+        self.w = 0
+        self.h = 0
+    
+    def read_frame(self):
+        return None
 
     def run(self):
         print('STARTING VIDEO RENDER THREAD')
         while not self.personal_stop_event.is_set() and (self.stop_event is None or not self.stop_event.is_set()):
-            result, video_frame = self.video_capture.read()  # read frames from the video
-            if result is False:
-                break  # terminate the loop if the frame is not read successfully
+            video_frame = self.read_frame()
+            if video_frame is None:
+                break
             
-            video_frame = self.process_frame(video_frame)
+            video_frame = self.post_process_frame(video_frame)
 
-            # frame delay
-            wait_process_frame(self.queue, video_frame)
+            # wait delay
+            while not self.queue.empty():
+                try: self.queue.get_nowait()
+                except Empty: break
+
+            self.queue.put(video_frame)
         
         self.cleanup()
 
-    def process_frame(self, video_frame):
+    def post_process_frame(self, video_frame):
         return video_frame
-
+    
     def cleanup(self):
+        if not self.active:
+            return
+
+        self.active = False
         self.personal_stop_event.set()
-        self.video_capture.release()
+        if self.exitCallback is not None:
+            self.exitCallback()
+    
         try:
             self.join(timeout=1)
         except RuntimeError:
             pass
+        
+class CV2_Render(Video_Render):
+    def __init__(self, source, x = 0, y = 0):
+        super().__init__(source, x, y)
+        self.video_capture = cv2.VideoCapture(source)
+        self.color_key = None
+        self.w = int(self.video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.h = int(self.video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    def read_frame(self):
+        result, video_frame = self.video_capture.read()
+        if result is False:
+            return None
+        return video_frame
+    
+    def set_color_key(self, hex_color, threshold=40):
+        lower, upper = hex_to_hsv_bounds(hex_color, threshold)
+        self.color_key = (lower, upper)
+    
+    def apply_color_key(self, video_frame):
+        # HSV Value
+        lower_color = numpy.array([35, 80, 80]) 
+        upper_color = numpy.array([85, 255, 255])
+        hsv = cv2.cvtColor(video_frame, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, lower_color, upper_color)
+
+        # Invert mask for foreground
+        mask_inv = cv2.bitwise_not(mask)
+
+        # Stack alpha to frame
+        alpha = mask_inv
+        bgr = video_frame if video_frame.shape[2] == 3 else video_frame[:, :, :3]
+        rgba = cv2.merge([bgr[:, :, 0], bgr[:, :, 1], bgr[:, :, 2], alpha])
+        return rgba
+    
+    def post_process_frame(self, video_frame):
+        if self.color_key is not None:
+            video_frame = self.apply_color_key(video_frame)
+        video_frame = cv2.cvtColor(video_frame, cv2.COLOR_BGRA2RGBA if video_frame.shape[2] == 4 else cv2.COLOR_BGR2RGBA)
+        return video_frame
+    
+    def cleanup(self):
+        super().cleanup()
+        self.video_capture.release()
 
 
-class CV2_Detection(VideoRender):    
-    def __init__(self, source, classifier):
-        super().__init__(source)
+class CV2_Detection(CV2_Render):    
+    def __init__(self, source, x = 0, y = 0, classifier = face_classifier):
+        super().__init__(source, x, y)
         self.prev_time = time.time()
         self.detect_time = 0
         self.face_state = False
         self.classifier = classifier
 
-    def process_frame(self, video_frame):
+    def post_process_frame(self, video_frame):
         current_time = time.time()
         delta_time = current_time - self.prev_time
         self.prev_time = current_time
@@ -186,10 +274,7 @@ class CV2_Detection(VideoRender):
         elif (detect_step > 0): # charging up
             video_frame = debug_draw_overlay(clock_overlay, video_frame)
 
-        if DEBUG:
-            print('DETECTION TIME: ' + str(self.detect_time))
-
-        return video_frame
+        return super().post_process_frame(video_frame)
     
 # endregion
 
@@ -204,6 +289,8 @@ class App:
         self.w, self.h = size
         self.canvas = tkinter.Canvas(root, width=self.w, height=self.h, bg="black")
         self.canvas.pack()
+
+        self.image_id = self.canvas.create_image(self.w / 2, self.h / 2, anchor=tkinter.CENTER)
 
         # threads
         self.threads = []
@@ -220,32 +307,52 @@ class App:
 
     def validate(self, video_render):
         video_render.stop_event = self.stop_event
-        if video_render.img_id is None:
-            video_render.img_id = self.canvas.create_image(self.w / 2, self.h / 2, anchor=tkinter.CENTER)
+        video_render.exitCallback = lambda: self.remove(video_render)
+        video_render.last_frame = None
 
     def remove(self, video_render):
+        if video_render not in self.threads:
+            return
         self.threads.remove(video_render)
+        video_render.exitCallback = None
         video_render.cleanup()
 
     def update(self):
         if self.stop_event.is_set():
             return
         
-        for self.thread in self.threads:
+        base_frame = Image.new('RGBA', (self.w, self.h))
+
+        x_offset = self.w / 2
+        y_offset = self.h / 2
+
+        for thread in self.threads:
             try:
-                frame = self.thread.queue.get_nowait()
-                self.thread.img = ImageTk.PhotoImage(Image.fromarray(frame))
-                self.canvas.itemconfig(self.thread.img_id, image=self.thread.img)
+                frame = thread.queue.get_nowait()
+                # frame caching
+                thread.last_frame = frame
             except Empty:
-                pass
+                frame = thread.last_frame
+                
+            if frame is None:
+                continue
+            
+            frame_pil = Image.fromarray(frame)
+            if frame.shape[2] == 3:
+                frame_pil = frame_pil.convert('RGBA')
+            base_frame.alpha_composite(frame_pil, dest=(int(x_offset - (thread.w / 2) + thread.x), int(y_offset - (thread.h / 2) + thread.y)))
+
+            
+        self.img = ImageTk.PhotoImage(base_frame)
+        self.canvas.itemconfig(self.image_id, image=self.img)
 
         self.root.after(ms_delay, self.update)
 
     def cleanup(self):
         self.stop_event.set()
         self.root.destroy()
-        for self.thread in self.threads:
-            self.thread.cleanup()
+        for thread in self.threads:
+            thread.cleanup()
         self.threads.clear()
 
 #####* PROGRAM START *#####
@@ -260,7 +367,8 @@ if __name__ == "__main__":
         print('Debug mode active')
     
     app = App(root, size=WINDOW_SIZE)
-    app.add(CV2_Detection(CAM_DEVICE, face_classifier))
+    
+    app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=face_classifier))
 
     root.mainloop()
 
