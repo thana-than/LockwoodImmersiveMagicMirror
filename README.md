@@ -11,9 +11,6 @@
 
 ## Getting Started
 
-This is an example of how you may give instructions on setting up your project locally.
-To get a local copy up and running follow these simple example steps.
-
 ### Prerequisites
 
 <a href="https://www.python.org/downloads/release/python-3124/">Python</a> (v. 3.12.4 was used for this implementation)
