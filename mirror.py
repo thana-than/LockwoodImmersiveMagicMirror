@@ -3,7 +3,7 @@ import time
 import argparse
 import tkinter
 import threading
-from PIL import Image, ImageTk, ImageColor
+from PIL import Image, ImageTk
 from queue import SimpleQueue, Empty
 import numpy
 import configparser
