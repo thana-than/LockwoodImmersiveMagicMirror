@@ -3,9 +3,10 @@ import time
 import argparse
 import tkinter
 import threading
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageColor
 from queue import SimpleQueue, Empty
 import numpy
+import configparser
 
 #TODO cleaner call for video overlay (currently in on_face_state_change)
 #TODO item detection model
@@ -25,6 +26,39 @@ parser.add_argument('-d', '--debug', action='store_true', default=False, help='S
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
 parser.add_argument('-w', '--window', default=(1920, 1080), nargs=2, metavar=('WIDTH', 'HEIGHT'), help='Set the desired Window Size. Defaults to 1920 1080.')
 args = parser.parse_args()
+
+# endregion
+
+# region Config File
+
+config_path = 'config.ini'
+config = configparser.ConfigParser()
+config['DEFAULT'] = {
+    'First_Low_RGB': '0, 82, 158',
+    'First_High_RGB': '0, 197, 255',
+    
+    'Second_Low_RGB': '174, 77, 63',
+    'Second_High_RGB': '255, 249, 168',
+    
+    'Third_Low_RGB': '24, 176, 119',
+    'Third_High_RGB': '124, 240, 253'
+    }
+
+with open(config_path, 'w') as configfile:
+    if configfile:
+        config.read(config_path)
+    else:
+        config.write(configfile)
+
+def config_to_rgb(parameter):
+    str = config['DEFAULT'][parameter]
+    rgb = [int(s.strip()) for s in str.split(',')]
+    return (rgb[0],rgb[1],rgb[2])
+
+first_candle_range = (config_to_rgb('First_Low_RGB'), config_to_rgb('First_High_RGB'))
+second_candle_range = (config_to_rgb('Second_Low_RGB'), config_to_rgb('Second_High_RGB'))
+third_candle_range = (config_to_rgb('Third_Low_RGB'), config_to_rgb('Third_High_RGB'))
+candle_ranges = (first_candle_range, second_candle_range, third_candle_range)
 
 # endregion
 
@@ -82,6 +116,42 @@ def detect_bounding_box(video_frame, classifier):
     gray_image = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY) # Greyscale for optimized detection
     faces = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
     return faces
+
+def find_color_bounds(in_color, low, high):
+    # Threshold on brightness (tune values)
+    mask = cv2.inRange(in_color, low, high)
+
+    # Morphology to clean up
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, numpy.ones((5,5), numpy.uint8))
+
+    # Find contours
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for c in contours:
+        x,y,w,h = cv2.boundingRect(c)
+        if w*h > 500:  # filter small noise
+            return (x,y,w,h)
+
+    return None
+
+def draw_rect_bounds(video_frame, bounds, draw_color):
+    x = bounds[0]
+    y = bounds[1]
+    w = bounds[2]
+    h = bounds[3]
+    d_r = draw_color[0]
+    d_g = draw_color[1]
+    d_b = draw_color[2]
+    cv2.rectangle(video_frame, (x,y), (x+w,y+h), (d_b,d_g,d_r), 2)
+
+def detect_candles(video_frame):
+    # Convert to HSV
+    in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB)
+
+    for candle in candle_ranges:
+        bounds = find_color_bounds(in_color, candle[0], candle[1])
+        if bounds:
+            draw_rect_bounds(video_frame, bounds, candle[0])
 
 def face_detected_update(video_frame, faces):
     return video_frame
@@ -248,10 +318,12 @@ class CV2_Detection(CV2_Render):
         self.prev_time = current_time
 
         faces = detect_bounding_box(video_frame, self.classifier)  # apply the function we created to the video frame 
-        video_frame = debug_draw_detection(video_frame, faces)
+        candles = detect_candles(video_frame)
+        items = faces# + candles
+        video_frame = debug_draw_detection(video_frame, items)
 
         # detection threshold
-        detect_step = DETECT_ACCEL if len(faces) > 0 else -DETECT_DECCEL 
+        detect_step = DETECT_ACCEL if len(items) > 0 else -DETECT_DECCEL 
 
         self.detect_time += delta_time * detect_step
         self.detect_time = clamp(self.detect_time, 0.0, 1.0)
@@ -269,7 +341,7 @@ class CV2_Detection(CV2_Render):
 
         # face state update methods
         if (current_face_state): #detected
-            video_frame = face_detected_update(video_frame, faces)
+            video_frame = face_detected_update(video_frame, items)
             video_frame = debug_draw_overlay(check_overlay, video_frame)
         elif (detect_step > 0): # charging up
             video_frame = debug_draw_overlay(clock_overlay, video_frame)
