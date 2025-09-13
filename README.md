@@ -40,6 +40,8 @@ python mirror.py --debug
   -f FPS, --fps FPS                         Set the desired Frames Per Second. Defaults to 30.
   -w WIDTH HEIGHT, --window WIDTH HEIGHT    Set the desired Window Size. Defaults to 1920 1080.
    ```
+## Config
+After you run mirror.py for the first time, a config.ini file will be written to the working directory. Different environments / cameras will affect color perception - this config exists so that you may update the candle color ranges as needed. If you need to update the config with accurate colors, I would recommend running with debug mode on `python mirror.py -d` and simply sample the colors shown in the video feed.
 ## Contact
 
 Than More - [thanathan.com](https://thanathan.com/) - than@thanathan.com
