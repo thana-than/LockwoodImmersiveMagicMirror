@@ -44,11 +44,10 @@ config['DEFAULT'] = {
     'Third_High_RGB': '124, 240, 253'
     }
 
+config.read(config_path)
+
 with open(config_path, 'w') as configfile:
-    if configfile:
-        config.read(config_path)
-    else:
-        config.write(configfile)
+    config.write(configfile)
 
 def config_to_rgb(parameter):
     str = config['DEFAULT'][parameter]
