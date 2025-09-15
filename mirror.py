@@ -8,10 +8,11 @@ from queue import SimpleQueue, Empty
 import numpy
 import configparser
 
-#TODO cleaner call for video overlay (currently in on_face_state_change)
-#TODO item detection model
+#TODO video speed (framerate?) fix
 #TODO render scaling
-#TODO video position and scaling based on position of object (?) (probably wont work with mirror surface perspective)
+# Old TODOS
+## cleaner call for video overlay (currently in on_face_state_change)
+## video position and scaling based on position of object (?) (probably wont work with mirror surface perspective)
 
 PROJECT_NAME = 'Magic Mirror'
 
@@ -44,6 +45,11 @@ config['DEFAULT'] = {
     'Third_High_RGB': '124, 240, 253'
     }
 
+config['COOLDOWNS'] = {
+    'Cooldown_Sequence_Correct': 5,
+    'Cooldown_Sequence_Incorrect': 5,
+    }
+
 config.read(config_path)
 
 with open(config_path, 'w') as configfile:
@@ -53,11 +59,6 @@ def config_to_rgb(parameter):
     str = config['DEFAULT'][parameter]
     rgb = [int(s.strip()) for s in str.split(',')]
     return (rgb[0],rgb[1],rgb[2])
-
-first_candle_range = (config_to_rgb('First_Low_RGB'), config_to_rgb('First_High_RGB'))
-second_candle_range = (config_to_rgb('Second_Low_RGB'), config_to_rgb('Second_High_RGB'))
-third_candle_range = (config_to_rgb('Third_Low_RGB'), config_to_rgb('Third_High_RGB'))
-candle_ranges = (first_candle_range, second_candle_range, third_candle_range)
 
 # endregion
 
@@ -77,8 +78,9 @@ VIDEO_SCALE_FACTOR = 1.1 # reduce image size for optimization (1 / VIDEO_SCALE_F
 clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
 check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
 
-overlay_video_filename = 'res/test_transparent.mp4'
-overlay_video_colorkey = '#00FF00'
+correct_video_filename = 'res/sequence_correct.mp4'
+incorrect_video_filename = 'res/sequence_incorrect.mp4'
+video_colorkey = '#00FF00'
 
 ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
 
@@ -133,7 +135,9 @@ def find_color_bounds(in_color, low, high):
 
     return None
 
-def draw_rect_bounds(video_frame, bounds, draw_color):
+def debug_draw_rect_bounds(video_frame, bounds, draw_color):
+    if not DEBUG:
+        return
     x = bounds[0]
     y = bounds[1]
     w = bounds[2]
@@ -143,24 +147,22 @@ def draw_rect_bounds(video_frame, bounds, draw_color):
     d_b = draw_color[2]
     cv2.rectangle(video_frame, (x,y), (x+w,y+h), (d_b,d_g,d_r), 2)
 
-def detect_candles(video_frame):
-    # Convert to HSV
-    in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB)
-
-    for candle in candle_ranges:
-        bounds = find_color_bounds(in_color, candle[0], candle[1])
-        if bounds:
-            draw_rect_bounds(video_frame, bounds, candle[0])
-
 def face_detected_update(video_frame, faces):
     return video_frame
 
+def play_correct_video():
+    video = CV2_Render(correct_video_filename)
+    video.set_color_key(video_colorkey)
+    app.add(video)
+    return
+
+def play_incorrect_video():
+    video = CV2_Render(incorrect_video_filename)
+    video.set_color_key(video_colorkey)
+    app.add(video)
+    return
+
 def on_face_state_change(face_state):
-    #TODO put this somewhere cleaner
-    if (face_state):
-        video = CV2_Render(overlay_video_filename)
-        video.set_color_key(overlay_video_colorkey)
-        app.add(video)
     return
 
 def debug_draw_detection(video_frame, faces):
@@ -239,6 +241,7 @@ class Video_Render(threading.Thread):
 
             self.queue.put(video_frame)
         
+        print('ENDING VIDEO RENDER THREAD')
         self.cleanup()
 
     def post_process_frame(self, video_frame):
@@ -301,7 +304,7 @@ class CV2_Render(Video_Render):
     def cleanup(self):
         super().cleanup()
         self.video_capture.release()
-
+        
 
 class CV2_Detection(CV2_Render):    
     def __init__(self, source, x = 0, y = 0, classifier = face_classifier):
@@ -317,7 +320,6 @@ class CV2_Detection(CV2_Render):
         self.prev_time = current_time
 
         faces = detect_bounding_box(video_frame, self.classifier)  # apply the function we created to the video frame 
-        candles = detect_candles(video_frame)
         items = faces# + candles
         video_frame = debug_draw_detection(video_frame, items)
 
@@ -350,6 +352,140 @@ class CV2_Detection(CV2_Render):
         else:
             return None # hide frame if not debugging
     
+# region Candle Sequencing
+
+class Candle():
+    def __init__(self, low_param, high_param):
+        self.low = config_to_rgb(low_param)
+        self.high = config_to_rgb(high_param)
+        self.display_color = self.low
+
+        self.detection = 0
+        self.bounds = (0,0,0,0)
+
+class CV2_Sequencer(CV2_Render):
+    def __init__(self, source, x = 0, y = 0, candles = []):
+        super().__init__(source, x, y)
+
+        self.candles = candles
+        self.current_sequence = []
+        self.last_state_change = 0
+        self.current_cooldown = 0
+
+        self.cooldown_correct = float(config['COOLDOWNS']['Cooldown_Sequence_Correct'])
+        self.cooldown_incorrect = float(config['COOLDOWNS']['Cooldown_Sequence_Incorrect'])
+        self.cooldown_next = 0
+
+        self.prev_time = time.time()
+        self.detect_time = 0
+        self.queue_clear = False
+
+    def incorrect_response(self):
+        print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
+        self.queue_clear = True
+        self.current_cooldown = self.cooldown_incorrect
+        play_incorrect_video()
+
+    def correct_response(self):
+        print("SEQUENCE CORRECT")
+        self.queue_clear = True
+        self.current_cooldown = self.cooldown_correct
+        play_correct_video()
+
+    def is_in_sequence(self, candle_index):
+        return candle_index in self.current_sequence
+
+    def try_add_to_sequence(self, candle_index):
+        if self.is_in_sequence(candle_index):
+            return
+        print("ADDED CANDLE " + str(candle_index) + " TO SEQUENCE")
+        self.current_cooldown = self.cooldown_next
+        self.current_sequence.append(candle_index)
+        self.process_sequence_state()
+
+    def clear_sequence(self):
+        self.queue_clear = False
+        self.current_sequence.clear()
+        for candle in self.candles:
+            candle.detection = 0
+
+    def update_candle_bounds(self, video_frame):
+        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB)
+                
+        for candle in self.candles:
+            candle.bounds = find_color_bounds(in_color, candle.low, candle.high)
+
+    def candle_detection_step(self, delta_time):                
+        for i in range(len(self.candles)):
+            candle = self.candles[i]
+
+            visible = candle.bounds != None
+            detect_step = DETECT_ACCEL if visible else -DETECT_DECCEL
+            candle.detection += detect_step
+
+            candle.detection += delta_time * detect_step
+            candle.detection = clamp(candle.detection, 0.0, 1.0)
+
+            if candle.detection >= 1:
+                self.try_add_to_sequence(i)
+
+    def process_sequence_state(self):
+        # Check if the candle sequence is finished and accurate
+        if len(self.current_sequence) != len(self.candles):
+            return
+        
+        for i in range(0, len(self.current_sequence)):
+            if self.current_sequence[i] != i:
+                self.incorrect_response()
+                return
+        self.correct_response()
+
+    def debug_draw_detected_candles(self, video_frame, candles):
+        if not DEBUG:
+            return
+        
+        for candle in candles:
+            if candle.bounds:
+                debug_draw_rect_bounds(video_frame, candle.bounds, candle.display_color)
+
+    def debug_draw_sequence_state(self, video_frame):
+        if not DEBUG:
+            return
+        for i in range(0, len(self.current_sequence)):
+            spacing = i * 50
+            display_color = self.candles[self.current_sequence[i]].display_color
+            cv2.circle(video_frame, center=(50 + spacing, 50), radius=20, color=(display_color[2], display_color[1], display_color[0]), thickness=-1)
+
+    def sequence_update(self, video_frame, delta_time):
+        self.current_cooldown -= delta_time
+
+        self.update_candle_bounds(video_frame)
+        
+        if self.current_cooldown <= 0:
+            self.current_cooldown = 0
+
+            if self.queue_clear:
+                self.clear_sequence()
+
+            self.candle_detection_step(delta_time)
+
+        self.debug_draw_detected_candles(video_frame, self.candles)
+        self.debug_draw_sequence_state(video_frame)
+
+    def post_process_frame(self, video_frame):
+        current_time = time.time()
+        delta_time = current_time - self.prev_time
+        self.prev_time = current_time
+
+        self.sequence_update(video_frame, delta_time)
+
+        if DEBUG:
+            return super().post_process_frame(video_frame)
+        else:
+            return None # hide frame if not debugging
+
+#endregion
+
 # endregion
 
 # region Main
@@ -442,7 +578,12 @@ if __name__ == "__main__":
     
     app = App(root, size=WINDOW_SIZE)
     
-    app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=face_classifier))
+    #app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=face_classifier))
+    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles=[
+        Candle('First_Low_RGB', 'First_High_RGB'),
+        Candle('Second_Low_RGB', 'Second_High_RGB'),
+        Candle('Third_Low_RGB', 'Third_High_RGB'),
+    ]))
 
     root.mainloop()
 
