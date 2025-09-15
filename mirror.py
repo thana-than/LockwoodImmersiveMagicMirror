@@ -421,7 +421,6 @@ class CV2_Sequencer(CV2_Render):
 
             visible = candle.bounds != None
             detect_step = DETECT_ACCEL if visible else -DETECT_DECCEL
-            candle.detection += detect_step
 
             candle.detection += delta_time * detect_step
             candle.detection = clamp(candle.detection, 0.0, 1.0)
