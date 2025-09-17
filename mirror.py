@@ -43,8 +43,9 @@ def load_candles_from_json(path):
         data = json.load(f)
     
     candles = []
-    for obj in data:
-        candles.append(Candle(obj["display_color"], obj["img_path"], obj["match_threshold"], obj['match_dist']))
+    for i in range(len(data)):
+        obj = data[i]
+        candles.append(Candle(obj["display_color"], i))
 
     return candles
 
@@ -99,6 +100,9 @@ face_classifier = cv2.CascadeClassifier(
 
 app = None
 
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+parameters = cv2.aruco.DetectorParameters()
+detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
 # endregion
 
 # region Methods
@@ -396,18 +400,13 @@ class CV2_Detection(CV2_Render):
 # region Candle Sequencing
 
 class Candle():
-    def __init__(self, color, img_path, match_threshold, match_dist):
+    def __init__(self, color, aruco_id):
         self.color = ImageColor.getcolor(color, "RGB")
         self.display_color = self.color
         self.detection = 0
         self.bounds = (0,0,0,0)
 
-        self.img = cv2.imread(img_path)
-        self.gray_img = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
-
-        self.kp_template, self.des_template = orb.detectAndCompute(self.gray_img, None)
-        self.match_threshold = match_threshold
-        self.match_dist = match_dist
+        self.aruco_id = aruco_id
 
 class CV2_Sequencer(CV2_Render):
     def __init__(self, source, x = 0, y = 0, candles = []):
@@ -457,13 +456,21 @@ class CV2_Sequencer(CV2_Render):
 
     def update_candle_bounds(self, video_frame):
         in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
-        kp_frame, des_frame = orb.detectAndCompute(in_color, None)
-        # _, thresh_frame = cv2.threshold(in_color, 128,255, cv2.THRESH_BINARY_INV)
-        # contours_frame, _ = cv2.findContours(thresh_frame, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
+        corners, ids, rejected = detector.detectMarkers(in_color)
+
         for candle in self.candles:
-            candle.bounds = find_orb_bounds(candle.kp_template, candle.des_template, kp_frame, des_frame, candle.match_dist, candle.match_threshold)
-            # candle.bounds = find_contour_bounds(candle.contours, contours_frame)
+            candle.bounds = None
+
+        if ids is None:
+            return
+        
+        ids = ids.flatten()
+        for candle in self.candles:
+            if candle.aruco_id in ids:
+                idx = list(ids).index(candle.aruco_id)
+                pts = corners[idx].reshape((4, 2)).astype(int)
+                candle.bounds = cv2.boundingRect(pts)
 
     def candle_detection_step(self, delta_time):                
         for i in range(len(self.candles)):
