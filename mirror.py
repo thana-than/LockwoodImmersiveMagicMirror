@@ -95,6 +95,14 @@ app = None
 
 # region Methods
 
+
+
+def to_lab(rgb):
+    # OpenCV expects images in BGR order, so reverse the tuple
+    bgr = numpy.uint8([[list(rgb[::-1])]])  # shape (1,1,3)
+    # Convert to Lab
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    return lab
 def hex_to_hsv_bounds(hex_color, threshold=40):
     hex_color = hex_color.lstrip('#')
     rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
@@ -359,6 +367,8 @@ class Candle():
     def __init__(self, low_param, high_param):
         self.low = config_to_rgb(low_param)
         self.high = config_to_rgb(high_param)
+        self.low_lab = to_lab(self.low)
+        self.high_lab = to_lab(self.high)
         self.display_color = self.low
 
         self.detection = 0
@@ -411,10 +421,10 @@ class CV2_Sequencer(CV2_Render):
             candle.detection = 0
 
     def update_candle_bounds(self, video_frame):
-        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB)
+        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2LAB)
                 
         for candle in self.candles:
-            candle.bounds = find_color_bounds(in_color, candle.low, candle.high)
+            candle.bounds = find_color_bounds(in_color, candle.low_lab, candle.high_lab)
 
     def candle_detection_step(self, delta_time):                
         for i in range(len(self.candles)):
