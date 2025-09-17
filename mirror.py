@@ -81,6 +81,7 @@ check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
 correct_video_filename = 'res/sequence_correct.mp4'
 incorrect_video_filename = 'res/sequence_incorrect.mp4'
 video_colorkey = '#00FF00'
+bounds_min = 500
 
 ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
 
@@ -130,7 +131,7 @@ def find_color_bounds(in_color, low, high):
 
     for c in contours:
         x,y,w,h = cv2.boundingRect(c)
-        if w*h > 500:  # filter small noise
+        if w*h > bounds_min:  # filter small noise
             return (x,y,w,h)
 
     return None
