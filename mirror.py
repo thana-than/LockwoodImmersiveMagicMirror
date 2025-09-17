@@ -3,10 +3,14 @@ import time
 import argparse
 import tkinter
 import threading
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageColor
 from queue import SimpleQueue, Empty
 import numpy
 import configparser
+import json
+
+#TODO phase out config?
+#TODO test on laptop, other environments
 
 #TODO video speed (framerate?) fix
 #TODO render scaling
@@ -30,20 +34,26 @@ args = parser.parse_args()
 
 # endregion
 
+# region JSON File
+
+json_file = 'candles.json'
+
+def load_candles_from_json(path):
+    with open(path, "r") as f:
+        data = json.load(f)
+    
+    candles = []
+    for obj in data:
+        candles.append(Candle(obj["display_color"], obj["img_path"], obj["match_threshold"], obj['match_dist']))
+
+    return candles
+
+# endregion
+
 # region Config File
 
 config_path = 'config.ini'
 config = configparser.ConfigParser()
-config['DEFAULT'] = {
-    'First_Low_RGB': '0, 82, 158',
-    'First_High_RGB': '0, 197, 255',
-    
-    'Second_Low_RGB': '174, 77, 63',
-    'Second_High_RGB': '255, 249, 168',
-    
-    'Third_Low_RGB': '24, 176, 119',
-    'Third_High_RGB': '124, 240, 253'
-    }
 
 config['COOLDOWNS'] = {
     'Cooldown_Sequence_Correct': 5,
@@ -54,11 +64,6 @@ config.read(config_path)
 
 with open(config_path, 'w') as configfile:
     config.write(configfile)
-
-def config_to_rgb(parameter):
-    str = config['DEFAULT'][parameter]
-    rgb = [int(s.strip()) for s in str.split(',')]
-    return (rgb[0],rgb[1],rgb[2])
 
 # endregion
 
@@ -73,7 +78,7 @@ DETECT_ACCEL = 2.0 # how fast the face state is registered
 DETECT_DECCEL = 0.5 # how fast the face state is deregistered
 DETECTION_THRESHOLD =  8 # thresholds that eliminate false positives, lower if face detection is spotty
 FACE_SIZE = 40 # minimum allowed face size
-VIDEO_SCALE_FACTOR = 1.1 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
+VIDEO_SCALE_FACTOR = 1.0 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
 
 clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
 check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
@@ -82,6 +87,9 @@ correct_video_filename = 'res/sequence_correct.mp4'
 incorrect_video_filename = 'res/sequence_incorrect.mp4'
 video_colorkey = '#00FF00'
 bounds_min = 500
+
+orb = cv2.ORB_create(nfeatures=1000)
+bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
 ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
 
@@ -127,6 +135,32 @@ def detect_bounding_box(video_frame, classifier):
     faces = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
     return faces
 
+def find_orb_bounds(kp_template, des_template, kp_frame, des_frame, match_dist = 50, match_threshold = 10):
+    if des_frame is not None and len(des_frame) > 0:
+        matches = bf.match(des_template, des_frame)
+        matches = sorted(matches, key=lambda x: x.distance)
+
+        # Keep only "good" matches (distance < threshold)
+        good_matches = [m for m in matches if m.distance < match_dist]
+
+        # match_ratio = len(good_matches) / len(matches)
+
+        if len(good_matches) > match_threshold:
+            # print(str(match_ratio)) 
+            # Build point arrays
+            src_pts = numpy.float32([kp_template[m.queryIdx].pt for m in good_matches]).reshape(-1,1,2)
+            dst_pts = numpy.float32([kp_frame[m.trainIdx].pt for m in good_matches]).reshape(-1,1,2)
+
+            # Homography
+            M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+            if M is not None:
+                x, y, w, h = cv2.boundingRect(numpy.int32(dst_pts))
+
+                if w*h > bounds_min:
+                    return (x,y,w,h)
+
+    return None
+
 def find_color_bounds(in_color, low, high):
     # Threshold on brightness (tune values)
     mask = cv2.inRange(in_color, low, high)
@@ -151,10 +185,8 @@ def debug_draw_rect_bounds(video_frame, bounds, draw_color):
     y = bounds[1]
     w = bounds[2]
     h = bounds[3]
-    d_r = draw_color[0]
-    d_g = draw_color[1]
-    d_b = draw_color[2]
-    cv2.rectangle(video_frame, (x,y), (x+w,y+h), (d_b,d_g,d_r), 2)
+    color = (draw_color[2], draw_color[1], draw_color[0])
+    cv2.rectangle(video_frame, (x,y), (x+w,y+h), color, 2)
 
 def face_detected_update(video_frame, faces):
     return video_frame
@@ -364,15 +396,18 @@ class CV2_Detection(CV2_Render):
 # region Candle Sequencing
 
 class Candle():
-    def __init__(self, low_param, high_param):
-        self.low = config_to_rgb(low_param)
-        self.high = config_to_rgb(high_param)
-        self.low_lab = to_lab(self.low)
-        self.high_lab = to_lab(self.high)
-        self.display_color = self.low
-
+    def __init__(self, color, img_path, match_threshold, match_dist):
+        self.color = ImageColor.getcolor(color, "RGB")
+        self.display_color = self.color
         self.detection = 0
         self.bounds = (0,0,0,0)
+
+        self.img = cv2.imread(img_path)
+        self.gray_img = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY)
+
+        self.kp_template, self.des_template = orb.detectAndCompute(self.gray_img, None)
+        self.match_threshold = match_threshold
+        self.match_dist = match_dist
 
 class CV2_Sequencer(CV2_Render):
     def __init__(self, source, x = 0, y = 0, candles = []):
@@ -421,10 +456,14 @@ class CV2_Sequencer(CV2_Render):
             candle.detection = 0
 
     def update_candle_bounds(self, video_frame):
-        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2LAB)
-                
+        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
+        kp_frame, des_frame = orb.detectAndCompute(in_color, None)
+        # _, thresh_frame = cv2.threshold(in_color, 128,255, cv2.THRESH_BINARY_INV)
+        # contours_frame, _ = cv2.findContours(thresh_frame, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         for candle in self.candles:
-            candle.bounds = find_color_bounds(in_color, candle.low_lab, candle.high_lab)
+            candle.bounds = find_orb_bounds(candle.kp_template, candle.des_template, kp_frame, des_frame, candle.match_dist, candle.match_threshold)
+            # candle.bounds = find_contour_bounds(candle.contours, contours_frame)
 
     def candle_detection_step(self, delta_time):                
         for i in range(len(self.candles)):
@@ -589,11 +628,7 @@ if __name__ == "__main__":
     app = App(root, size=WINDOW_SIZE)
     
     #app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=face_classifier))
-    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles=[
-        Candle('First_Low_RGB', 'First_High_RGB'),
-        Candle('Second_Low_RGB', 'Second_High_RGB'),
-        Candle('Third_Low_RGB', 'Third_High_RGB'),
-    ]))
+    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file)))
 
     root.mainloop()
 

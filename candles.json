@@ -1,0 +1,20 @@
+[
+    {
+        "display_color": "#FF0000",
+        "img_path": "res/candle_icon_0.png",
+        "match_threshold": 9,
+        "match_dist": 50
+    },
+    {
+        "display_color": "#00FF00",
+        "img_path": "res/candle_icon_1.png",
+        "match_threshold": 23,
+        "match_dist": 50
+    },
+    {
+        "display_color": "#0000FF",
+        "img_path": "res/candle_icon_2.png",
+        "match_threshold": 9,
+        "match_dist": 50
+    }
+]
