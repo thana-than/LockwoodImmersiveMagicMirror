@@ -3,10 +3,15 @@ import time
 import argparse
 import tkinter
 import threading
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageColor
 from queue import SimpleQueue, Empty
 import numpy
 import configparser
+import json
+import os
+
+#TODO phase out config?
+#TODO test on laptop, other environments
 
 #TODO video speed (framerate?) fix
 #TODO render scaling
@@ -30,35 +35,83 @@ args = parser.parse_args()
 
 # endregion
 
+# region JSON File
+
+DEFAULT_JSON_SCHEMA = {
+    "display_color": "#0000FF",
+    "aruco_id": 0,
+}
+
+##TODO validation to rewrite file if values don't exist
+DEFAULT_JSON_DATA =[
+        {
+            "display_color": "#0000FF",
+            "aruco_id": 0,
+        },
+        {
+            "display_color": "#FF0000",
+            "aruco_id": 1,
+        },
+        {
+            "display_color": "#00FF00",
+            "aruco_id": 2,
+        },
+    ]
+
+json_file = 'candles.json'
+
+def write_default_json(path):
+    with open(path, 'w') as f:
+        json.dump(DEFAULT_JSON_DATA, f, indent=4)
+    return DEFAULT_JSON_DATA
+
+def validate_json(data):
+    for i in range(len(data)):
+        schema = DEFAULT_JSON_SCHEMA
+        if i < len(DEFAULT_JSON_DATA):
+            schema = DEFAULT_JSON_DATA[i]
+
+        for key in schema:
+            data[i][key] = data[i].get(key, schema[key])
+
+    return data
+        
+
+def load_candles_from_json(path):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            data = json.load(f)
+    else:
+        data = DEFAULT_JSON_DATA
+    
+    data = validate_json(data)
+
+    candles = []
+    for i in range(len(data)):
+        obj = data[i]
+        candles.append(Candle(obj["display_color"], int(obj["aruco_id"])))
+
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=4)
+
+    return candles
+
+# endregion
+
 # region Config File
 
 config_path = 'config.ini'
 config = configparser.ConfigParser()
-config['DEFAULT'] = {
-    'First_Low_RGB': '0, 82, 158',
-    'First_High_RGB': '0, 197, 255',
-    
-    'Second_Low_RGB': '174, 77, 63',
-    'Second_High_RGB': '255, 249, 168',
-    
-    'Third_Low_RGB': '24, 176, 119',
-    'Third_High_RGB': '124, 240, 253'
-    }
 
-config['COOLDOWNS'] = {
-    'Cooldown_Sequence_Correct': 5,
-    'Cooldown_Sequence_Incorrect': 5,
+config['DETECTION'] = {
+    'Detection_Build_Speed': 3.0,
+    'Detection_Reduce_Speed': .5,
     }
 
 config.read(config_path)
 
 with open(config_path, 'w') as configfile:
     config.write(configfile)
-
-def config_to_rgb(parameter):
-    str = config['DEFAULT'][parameter]
-    rgb = [int(s.strip()) for s in str.split(',')]
-    return (rgb[0],rgb[1],rgb[2])
 
 # endregion
 
@@ -69,11 +122,12 @@ DEBUG = args.debug
 FRAMES_PER_SECOND = int(args.fps)
 WINDOW_SIZE = (int(args.window[0]), int(args.window[1]))
 
-DETECT_ACCEL = 2.0 # how fast the face state is registered
-DETECT_DECCEL = 0.5 # how fast the face state is deregistered
+detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
+detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
+
 DETECTION_THRESHOLD =  8 # thresholds that eliminate false positives, lower if face detection is spotty
 FACE_SIZE = 40 # minimum allowed face size
-VIDEO_SCALE_FACTOR = 1.1 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
+VIDEO_SCALE_FACTOR = 1.0 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
 
 clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
 check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
@@ -81,6 +135,10 @@ check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
 correct_video_filename = 'res/sequence_correct.mp4'
 incorrect_video_filename = 'res/sequence_incorrect.mp4'
 video_colorkey = '#00FF00'
+bounds_min = 500
+
+orb = cv2.ORB_create(nfeatures=1000)
+bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
 ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
 
@@ -90,10 +148,21 @@ face_classifier = cv2.CascadeClassifier(
 
 app = None
 
+aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+parameters = cv2.aruco.DetectorParameters()
+detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
 # endregion
 
 # region Methods
 
+
+
+def to_lab(rgb):
+    # OpenCV expects images in BGR order, so reverse the tuple
+    bgr = numpy.uint8([[list(rgb[::-1])]])  # shape (1,1,3)
+    # Convert to Lab
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    return lab
 def hex_to_hsv_bounds(hex_color, threshold=40):
     hex_color = hex_color.lstrip('#')
     rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
@@ -118,6 +187,32 @@ def detect_bounding_box(video_frame, classifier):
     faces = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
     return faces
 
+def find_orb_bounds(kp_template, des_template, kp_frame, des_frame, match_dist = 50, match_threshold = 10):
+    if des_frame is not None and len(des_frame) > 0:
+        matches = bf.match(des_template, des_frame)
+        matches = sorted(matches, key=lambda x: x.distance)
+
+        # Keep only "good" matches (distance < threshold)
+        good_matches = [m for m in matches if m.distance < match_dist]
+
+        # match_ratio = len(good_matches) / len(matches)
+
+        if len(good_matches) > match_threshold:
+            # print(str(match_ratio)) 
+            # Build point arrays
+            src_pts = numpy.float32([kp_template[m.queryIdx].pt for m in good_matches]).reshape(-1,1,2)
+            dst_pts = numpy.float32([kp_frame[m.trainIdx].pt for m in good_matches]).reshape(-1,1,2)
+
+            # Homography
+            M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+            if M is not None:
+                x, y, w, h = cv2.boundingRect(numpy.int32(dst_pts))
+
+                if w*h > bounds_min:
+                    return (x,y,w,h)
+
+    return None
+
 def find_color_bounds(in_color, low, high):
     # Threshold on brightness (tune values)
     mask = cv2.inRange(in_color, low, high)
@@ -130,7 +225,7 @@ def find_color_bounds(in_color, low, high):
 
     for c in contours:
         x,y,w,h = cv2.boundingRect(c)
-        if w*h > 500:  # filter small noise
+        if w*h > bounds_min:  # filter small noise
             return (x,y,w,h)
 
     return None
@@ -142,10 +237,8 @@ def debug_draw_rect_bounds(video_frame, bounds, draw_color):
     y = bounds[1]
     w = bounds[2]
     h = bounds[3]
-    d_r = draw_color[0]
-    d_g = draw_color[1]
-    d_b = draw_color[2]
-    cv2.rectangle(video_frame, (x,y), (x+w,y+h), (d_b,d_g,d_r), 2)
+    color = (draw_color[2], draw_color[1], draw_color[0])
+    cv2.rectangle(video_frame, (x,y), (x+w,y+h), color, 2)
 
 def face_detected_update(video_frame, faces):
     return video_frame
@@ -324,7 +417,7 @@ class CV2_Detection(CV2_Render):
         video_frame = debug_draw_detection(video_frame, items)
 
         # detection threshold
-        detect_step = DETECT_ACCEL if len(items) > 0 else -DETECT_DECCEL 
+        detect_step = detect_accel if len(items) > 0 else -detect_deccel 
 
         self.detect_time += delta_time * detect_step
         self.detect_time = clamp(self.detect_time, 0.0, 1.0)
@@ -355,13 +448,13 @@ class CV2_Detection(CV2_Render):
 # region Candle Sequencing
 
 class Candle():
-    def __init__(self, low_param, high_param):
-        self.low = config_to_rgb(low_param)
-        self.high = config_to_rgb(high_param)
-        self.display_color = self.low
-
+    def __init__(self, color, aruco_id):
+        self.color = ImageColor.getcolor(color, "RGB")
+        self.display_color = self.color
         self.detection = 0
         self.bounds = (0,0,0,0)
+
+        self.aruco_id = aruco_id
 
 class CV2_Sequencer(CV2_Render):
     def __init__(self, source, x = 0, y = 0, candles = []):
@@ -370,11 +463,6 @@ class CV2_Sequencer(CV2_Render):
         self.candles = candles
         self.current_sequence = []
         self.last_state_change = 0
-        self.current_cooldown = 0
-
-        self.cooldown_correct = float(config['COOLDOWNS']['Cooldown_Sequence_Correct'])
-        self.cooldown_incorrect = float(config['COOLDOWNS']['Cooldown_Sequence_Incorrect'])
-        self.cooldown_next = 0
 
         self.prev_time = time.time()
         self.detect_time = 0
@@ -383,13 +471,11 @@ class CV2_Sequencer(CV2_Render):
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
         self.queue_clear = True
-        self.current_cooldown = self.cooldown_incorrect
         play_incorrect_video()
 
     def correct_response(self):
         print("SEQUENCE CORRECT")
         self.queue_clear = True
-        self.current_cooldown = self.cooldown_correct
         play_correct_video()
 
     def is_in_sequence(self, candle_index):
@@ -399,7 +485,6 @@ class CV2_Sequencer(CV2_Render):
         if self.is_in_sequence(candle_index):
             return
         print("ADDED CANDLE " + str(candle_index) + " TO SEQUENCE")
-        self.current_cooldown = self.cooldown_next
         self.current_sequence.append(candle_index)
         self.process_sequence_state()
 
@@ -410,21 +495,35 @@ class CV2_Sequencer(CV2_Render):
             candle.detection = 0
 
     def update_candle_bounds(self, video_frame):
-        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB)
-                
+        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
+
+        corners, ids, rejected = detector.detectMarkers(in_color)
+
         for candle in self.candles:
-            candle.bounds = find_color_bounds(in_color, candle.low, candle.high)
+            candle.bounds = None
+
+        if ids is None:
+            return
+        
+        ids = ids.flatten()
+        for candle in self.candles:
+            if candle.aruco_id in ids:
+                idx = list(ids).index(candle.aruco_id)
+                pts = corners[idx].reshape((4, 2)).astype(int)
+                candle.bounds = cv2.boundingRect(pts)
 
     def candle_detection_step(self, delta_time):                
         for i in range(len(self.candles)):
             candle = self.candles[i]
 
             visible = candle.bounds != None
-            detect_step = DETECT_ACCEL if visible else -DETECT_DECCEL
+            detect_step = detect_accel if visible else -detect_deccel
 
             candle.detection += delta_time * detect_step
             candle.detection = clamp(candle.detection, 0.0, 1.0)
 
+    def candle_sequence_step(self):
+        for i, candle in enumerate(self.candles):
             if candle.detection >= 1:
                 self.try_add_to_sequence(i)
 
@@ -456,19 +555,18 @@ class CV2_Sequencer(CV2_Render):
             cv2.circle(video_frame, center=(50 + spacing, 50), radius=20, color=(display_color[2], display_color[1], display_color[0]), thickness=-1)
 
     def sequence_update(self, video_frame, delta_time):
-        self.current_cooldown -= delta_time
-
         self.update_candle_bounds(video_frame)
-        
-        if self.current_cooldown <= 0:
-            self.current_cooldown = 0
 
-            if self.queue_clear:
-                self.clear_sequence()
-
-            self.candle_detection_step(delta_time)
-
+        self.candle_detection_step(delta_time)
         self.debug_draw_detected_candles(video_frame, self.candles)
+        
+        if self.queue_clear:
+            for candle in self.candles:
+                if candle.detection > 0:
+                    return
+            self.clear_sequence()
+
+        self.candle_sequence_step()
         self.debug_draw_sequence_state(video_frame)
 
     def post_process_frame(self, video_frame):
@@ -578,11 +676,7 @@ if __name__ == "__main__":
     app = App(root, size=WINDOW_SIZE)
     
     #app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=face_classifier))
-    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles=[
-        Candle('First_Low_RGB', 'First_High_RGB'),
-        Candle('Second_Low_RGB', 'Second_High_RGB'),
-        Candle('Third_Low_RGB', 'Third_High_RGB'),
-    ]))
+    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file)))
 
     root.mainloop()
 
