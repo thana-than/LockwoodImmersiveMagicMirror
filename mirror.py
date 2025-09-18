@@ -8,6 +8,7 @@ from queue import SimpleQueue, Empty
 import numpy
 import configparser
 import json
+import os
 
 #TODO phase out config?
 #TODO test on laptop, other environments
@@ -36,16 +37,62 @@ args = parser.parse_args()
 
 # region JSON File
 
+DEFAULT_JSON_SCHEMA = {
+    "display_color": "#0000FF",
+    "aruco_id": 0,
+}
+
+##TODO validation to rewrite file if values don't exist
+DEFAULT_JSON_DATA =[
+        {
+            "display_color": "#0000FF",
+            "aruco_id": 0,
+        },
+        {
+            "display_color": "#FF0000",
+            "aruco_id": 1,
+        },
+        {
+            "display_color": "#00FF00",
+            "aruco_id": 2,
+        },
+    ]
+
 json_file = 'candles.json'
 
+def write_default_json(path):
+    with open(path, 'w') as f:
+        json.dump(DEFAULT_JSON_DATA, f, indent=4)
+    return DEFAULT_JSON_DATA
+
+def validate_json(data):
+    for i in range(len(data)):
+        schema = DEFAULT_JSON_SCHEMA
+        if i < len(DEFAULT_JSON_DATA):
+            schema = DEFAULT_JSON_DATA[i]
+
+        for key in schema:
+            data[i][key] = data[i].get(key, schema[key])
+
+    return data
+        
+
 def load_candles_from_json(path):
-    with open(path, "r") as f:
-        data = json.load(f)
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            data = json.load(f)
+    else:
+        data = DEFAULT_JSON_DATA
     
+    data = validate_json(data)
+
     candles = []
     for i in range(len(data)):
         obj = data[i]
-        candles.append(Candle(obj["display_color"], i))
+        candles.append(Candle(obj["display_color"], int(obj["aruco_id"])))
+
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=4)
 
     return candles
 
@@ -56,9 +103,9 @@ def load_candles_from_json(path):
 config_path = 'config.ini'
 config = configparser.ConfigParser()
 
-config['COOLDOWNS'] = {
-    'Cooldown_Sequence_Correct': 5,
-    'Cooldown_Sequence_Incorrect': 5,
+config['DETECTION'] = {
+    'Detection_Build_Speed': 3.0,
+    'Detection_Reduce_Speed': .5,
     }
 
 config.read(config_path)
@@ -75,8 +122,9 @@ DEBUG = args.debug
 FRAMES_PER_SECOND = int(args.fps)
 WINDOW_SIZE = (int(args.window[0]), int(args.window[1]))
 
-DETECT_ACCEL = 2.0 # how fast the face state is registered
-DETECT_DECCEL = 0.5 # how fast the face state is deregistered
+detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
+detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
+
 DETECTION_THRESHOLD =  8 # thresholds that eliminate false positives, lower if face detection is spotty
 FACE_SIZE = 40 # minimum allowed face size
 VIDEO_SCALE_FACTOR = 1.0 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
@@ -369,7 +417,7 @@ class CV2_Detection(CV2_Render):
         video_frame = debug_draw_detection(video_frame, items)
 
         # detection threshold
-        detect_step = DETECT_ACCEL if len(items) > 0 else -DETECT_DECCEL 
+        detect_step = detect_accel if len(items) > 0 else -detect_deccel 
 
         self.detect_time += delta_time * detect_step
         self.detect_time = clamp(self.detect_time, 0.0, 1.0)
@@ -415,11 +463,6 @@ class CV2_Sequencer(CV2_Render):
         self.candles = candles
         self.current_sequence = []
         self.last_state_change = 0
-        self.current_cooldown = 0
-
-        self.cooldown_correct = float(config['COOLDOWNS']['Cooldown_Sequence_Correct'])
-        self.cooldown_incorrect = float(config['COOLDOWNS']['Cooldown_Sequence_Incorrect'])
-        self.cooldown_next = 0
 
         self.prev_time = time.time()
         self.detect_time = 0
@@ -428,13 +471,11 @@ class CV2_Sequencer(CV2_Render):
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
         self.queue_clear = True
-        self.current_cooldown = self.cooldown_incorrect
         play_incorrect_video()
 
     def correct_response(self):
         print("SEQUENCE CORRECT")
         self.queue_clear = True
-        self.current_cooldown = self.cooldown_correct
         play_correct_video()
 
     def is_in_sequence(self, candle_index):
@@ -444,7 +485,6 @@ class CV2_Sequencer(CV2_Render):
         if self.is_in_sequence(candle_index):
             return
         print("ADDED CANDLE " + str(candle_index) + " TO SEQUENCE")
-        self.current_cooldown = self.cooldown_next
         self.current_sequence.append(candle_index)
         self.process_sequence_state()
 
@@ -477,11 +517,13 @@ class CV2_Sequencer(CV2_Render):
             candle = self.candles[i]
 
             visible = candle.bounds != None
-            detect_step = DETECT_ACCEL if visible else -DETECT_DECCEL
+            detect_step = detect_accel if visible else -detect_deccel
 
             candle.detection += delta_time * detect_step
             candle.detection = clamp(candle.detection, 0.0, 1.0)
 
+    def candle_sequence_step(self):
+        for i, candle in enumerate(self.candles):
             if candle.detection >= 1:
                 self.try_add_to_sequence(i)
 
@@ -513,19 +555,18 @@ class CV2_Sequencer(CV2_Render):
             cv2.circle(video_frame, center=(50 + spacing, 50), radius=20, color=(display_color[2], display_color[1], display_color[0]), thickness=-1)
 
     def sequence_update(self, video_frame, delta_time):
-        self.current_cooldown -= delta_time
-
         self.update_candle_bounds(video_frame)
-        
-        if self.current_cooldown <= 0:
-            self.current_cooldown = 0
 
-            if self.queue_clear:
-                self.clear_sequence()
-
-            self.candle_detection_step(delta_time)
-
+        self.candle_detection_step(delta_time)
         self.debug_draw_detected_candles(video_frame, self.candles)
+        
+        if self.queue_clear:
+            for candle in self.candles:
+                if candle.detection > 0:
+                    return
+            self.clear_sequence()
+
+        self.candle_sequence_step()
         self.debug_draw_sequence_state(video_frame)
 
     def post_process_frame(self, video_frame):
