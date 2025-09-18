@@ -40,8 +40,32 @@ python mirror.py --debug
   -f FPS, --fps FPS                         Set the desired Frames Per Second. Defaults to 30.
   -w WIDTH HEIGHT, --window WIDTH HEIGHT    Set the desired Window Size. Defaults to 1920 1080.
    ```
-## Config
-After you run mirror.py for the first time, a config.ini file will be written to the working directory. Different environments / cameras will affect color perception - this config exists so that you may update the candle color ranges as needed. If you need to update the config with accurate colors, I would recommend running with debug mode on `python mirror.py -d` and simply sample the colors shown in the video feed.
+## Json Configuration
+Array is in order of correct candle sequence. </br>
+`candles.json` *(will appear after first run)*
+```
+[
+    {
+        "display_color": "#0000FF",          Color for debugging.
+        "aruco_id": 0                        ID on the visible aruco tag.
+    },
+    {
+        "display_color": "#FF0000",
+        "aruco_id": 1
+    },
+    {
+        "display_color": "#00FF00",
+        "aruco_id": 2
+    }
+]
+```
+## Extra Configuration
+`config.ini` *(will appear after first run)*
+```
+[DETECTION]
+detection_build_speed = 3.0                 The speed at which a target is counted as detected.
+detection_reduce_speed = 1.0                The speed at which a target is removed from detection (when out of view).
+```
 ## Contact
 
 Than More - [thanathan.com](https://thanathan.com/) - than@thanathan.com
