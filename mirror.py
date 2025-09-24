@@ -31,7 +31,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument('-c', '--camera', default=0, help='Index of camera device. Default is 0 (the default camera device).')
 parser.add_argument('-d', '--debug', action='store_true', default=False, help='Shows debug frame and detection state. Defaults to False.')
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
-parser.add_argument('-p', '--port', default=5005, help='Port where candle data is sent.')
+parser.add_argument('-p', '--port', default=5005, help='Port where sequencing data is sent. Useful for external rendering.')
 parser.add_argument('-w', '--window', default=(1920, 1080), nargs=2, metavar=('WIDTH', 'HEIGHT'), help='Set the desired Window Size. Defaults to 1920 1080.')
 args = parser.parse_args()
 
