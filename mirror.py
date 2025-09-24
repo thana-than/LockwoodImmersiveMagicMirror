@@ -486,14 +486,18 @@ class CV2_Sequencer(CV2_Render):
         self.detect_time = 0
         self.queue_clear = False
 
+        self.state_name = "DETECT"
+
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
         self.queue_clear = True
+        self.state_name = "INCORRECT"
         play_incorrect_video()
 
     def correct_response(self):
         print("SEQUENCE CORRECT")
         self.queue_clear = True
+        self.state_name = "CORRECT"
         play_correct_video()
 
     def is_in_sequence(self, candle_index):
@@ -508,9 +512,16 @@ class CV2_Sequencer(CV2_Render):
 
     def clear_sequence(self):
         self.queue_clear = False
+        self.state_name = "DETECT"
         self.current_sequence.clear()
         for candle in self.candles:
             candle.detection = 0
+
+    def get_sequence_data(self):
+        return {
+            "order": self.current_sequence,
+            "state": self.state_name,
+        }
 
     def update_candle_bounds(self, video_frame):
         in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
@@ -574,7 +585,12 @@ class CV2_Sequencer(CV2_Render):
 
     def upload_state(self):
         candle_data = [c.get_data() for c in self.candles]
-        json_data = json.dumps(candle_data)      
+        sequence_data = self.get_sequence_data()
+        data = {
+            "candles": candle_data,
+            "sequence": sequence_data
+        }
+        json_data = json.dumps(data)      
         sock.sendto(json_data.encode(), (IP, PORT))
         return
 
