@@ -78,7 +78,8 @@ Lockwood Immersive - [www.lockwoodimmersive.com](https://www.lockwoodimmersive.c
 <br/>
 Hand Eye Society - [www.handeyesociety.com](https://www.handeyesociety.com/) - info@handeyesociety.com
 <br/><br/>
-Project Link - [github.com/thana-than/LockwoodImmersiveMagicMirror](https://github.com/thana-than/LockwoodImmersiveMagicMirror)
+Python Backend - [github.com/thana-than/LockwoodImmersiveMagicMirror](https://github.com/thana-than/LockwoodImmersiveMagicMirror)
+External Renderer - [github.com/thana-than/LockwoodImmersiveMagicMirrorRenderer](https://github.com/thana-than/LockwoodImmersiveMagicMirrorRenderer)
 
 ## License
 
