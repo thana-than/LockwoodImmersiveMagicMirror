@@ -9,6 +9,7 @@ import numpy
 import configparser
 import json
 import os
+import socket
 
 #TODO phase out config?
 #TODO test on laptop, other environments
@@ -30,8 +31,18 @@ parser = argparse.ArgumentParser(
 parser.add_argument('-c', '--camera', default=0, help='Index of camera device. Default is 0 (the default camera device).')
 parser.add_argument('-d', '--debug', action='store_true', default=False, help='Shows debug frame and detection state. Defaults to False.')
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
+parser.add_argument('-p', '--port', default=5005, help='Port where candle data is sent.')
 parser.add_argument('-w', '--window', default=(1920, 1080), nargs=2, metavar=('WIDTH', 'HEIGHT'), help='Set the desired Window Size. Defaults to 1920 1080.')
 args = parser.parse_args()
+
+# endregion
+
+# region UDP
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+IP = "127.0.0.1" #localhost
+PORT = int(args.port)
+
 
 # endregion
 
@@ -456,6 +467,13 @@ class Candle():
 
         self.aruco_id = aruco_id
 
+    def get_data(self):
+        return {
+            "detection" : self.detection,
+            "bounds" : self.bounds
+        }
+        
+
 class CV2_Sequencer(CV2_Render):
     def __init__(self, source, x = 0, y = 0, candles = []):
         super().__init__(source, x, y)
@@ -468,14 +486,18 @@ class CV2_Sequencer(CV2_Render):
         self.detect_time = 0
         self.queue_clear = False
 
+        self.state_name = "DETECT"
+
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
         self.queue_clear = True
+        self.state_name = "INCORRECT"
         play_incorrect_video()
 
     def correct_response(self):
         print("SEQUENCE CORRECT")
         self.queue_clear = True
+        self.state_name = "CORRECT"
         play_correct_video()
 
     def is_in_sequence(self, candle_index):
@@ -490,9 +512,16 @@ class CV2_Sequencer(CV2_Render):
 
     def clear_sequence(self):
         self.queue_clear = False
+        self.state_name = "DETECT"
         self.current_sequence.clear()
         for candle in self.candles:
             candle.detection = 0
+
+    def get_sequence_data(self):
+        return {
+            "order": self.current_sequence,
+            "state": self.state_name,
+        }
 
     def update_candle_bounds(self, video_frame):
         in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
@@ -554,10 +583,22 @@ class CV2_Sequencer(CV2_Render):
             display_color = self.candles[self.current_sequence[i]].display_color
             cv2.circle(video_frame, center=(50 + spacing, 50), radius=20, color=(display_color[2], display_color[1], display_color[0]), thickness=-1)
 
+    def upload_state(self):
+        candle_data = [c.get_data() for c in self.candles]
+        sequence_data = self.get_sequence_data()
+        data = {
+            "candles": candle_data,
+            "sequence": sequence_data
+        }
+        json_data = json.dumps(data)      
+        sock.sendto(json_data.encode(), (IP, PORT))
+        return
+
     def sequence_update(self, video_frame, delta_time):
         self.update_candle_bounds(video_frame)
 
         self.candle_detection_step(delta_time)
+
         self.debug_draw_detected_candles(video_frame, self.candles)
         
         if self.queue_clear:
@@ -568,6 +609,7 @@ class CV2_Sequencer(CV2_Render):
 
         self.candle_sequence_step()
         self.debug_draw_sequence_state(video_frame)
+        self.upload_state()
 
     def post_process_frame(self, video_frame):
         current_time = time.time()
