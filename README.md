@@ -15,6 +15,9 @@
 
 <a href="https://www.python.org/downloads/release/python-3124/">Python</a> (v. 3.12.4 was used for this implementation)
 
+### Renderer
+Make sure you download the external <a href="https://github.com/thana-than/LockwoodImmersiveMagicMirrorRenderer">Godot Renderer</a> for better visuals!
+
 ### Installation
 
 1. Clone the repo
@@ -38,6 +41,7 @@ python mirror.py --debug
   -c CAMERA, --camera CAMERA                Index of camera device. Default is 0 (the default camera device).
   -d, --debug                               Shows debug frame and detection state. Defaults to False.
   -f FPS, --fps FPS                         Set the desired Frames Per Second. Defaults to 30.
+  -p PORT, --port PORT                      Port where sequencing data is sent. Useful for external rendering.
   -w WIDTH HEIGHT, --window WIDTH HEIGHT    Set the desired Window Size. Defaults to 1920 1080.
    ```
 ## Json Configuration
