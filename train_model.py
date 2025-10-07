@@ -114,12 +114,12 @@ def run_transformations(image_path, train_dir, test_dir, transformations = TRANS
         return
 
     image_data = cv2.imread(image_path)
+    image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
+    
     height, width = image_data.shape[:2]
     if height < TARGET_RESIZE_MIN or width < TARGET_RESIZE_MIN:
         print(f'\nWarning: Image {image_path} is smaller than target size {TARGET_RESIZE_MIN}x{TARGET_RESIZE_MIN}. Resizing.')
         image_data = cv2.resize(image_data, (max(width, TARGET_RESIZE_MIN), max(height, TARGET_RESIZE_MIN)))
-
-    image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
 
     name, ext = os.path.splitext(os.path.basename(image_path))
     #* Apply transformations to image data
