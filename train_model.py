@@ -2,10 +2,10 @@ import argparse
 import os
 import shutil
 import cv2
-import tensorflow as tf
-from tensorflow.keras.processing.image import ImageDataGenerator
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+import albumentations as A
+import numpy as np
+import glob
+from sklearn.preprocessing import LabelEncoder
 
 # region Argument Parsing
 
@@ -14,74 +14,169 @@ parser = argparse.ArgumentParser(
     description='Training model for Magic Mirror prop used for Lockwood Immersive\'s HES Ball 2025 integration.',
     epilog='Created by Than | https://github.com/thana-than/LockwoodImmersiveMagicMirror')
 parser.add_argument('-g', '--generate', default='', help='Generate extrapolated training data from folder.')
-parser.add_argument('-d', '--directory', default='training_data/gen', help='Directory of training data.')
-parser.add_argument('-o', '--output', default='training_data/model.h5', help='Location to output model file.')
+parser.add_argument('-d', '--directory', default='training_data/train', help='Directory of training data.')
+parser.add_argument('-t', '--test-directory', default='training_data/test', help='Directory of testing data.')
+parser.add_argument('-o', '--output', default='training_data/model.xml', help='Location to output model file.')
 parser.add_argument('-s', '--skip-training', action='store_true', default=False, help='Skip model training step.')
-parser.add_argument('-t', '--transformations', default=64, help='How many transformations to generate per image.')
 args = parser.parse_args()
 
 # endregion
 
+# region Variables
+
+TARGET_SIZE = 64
+TRANSFORMATIONS = 1000
+TEST_RATIO = 0.2
+
+#endregion
+
 # region Generate Data
 
-# Data generators with augmentation
-train_datagen = ImageDataGenerator(
-    rescale=1./255,
-    rotation_range=20,
-    width_shift_range=0.1,
-    height_shift_range=0.1,
-    zoom_range=0.2,
-    horizontal_flip=True
-)
+#* Read https://albumentations.ai/docs/3-basic-usage/choosing-augmentations/
+seq = A.Compose([
+    A.RandomCrop(height=TARGET_SIZE, width=TARGET_SIZE), 
+    A.HorizontalFlip(p=0.5),
+    A.Affine(
+        scale=(0.8, 1.2),
+        translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+        rotate=(-25, 25),
+        shear=(-8, 8),
+        p=1.0
+    ),
+    A.OneOf([
+        A.CoarseDropout(num_holes_range=(1, 8), hole_height_range=(0.1, 0.25),
+                        hole_width_range=(0.1, 0.25), p=1.0),
+        A.GridDropout(ratio=0.5, unit_size_range=(5, 10), p=1.0)
+    ], p=0.5),
+    A.OneOf([
+        A.ToGray(p=0.3),
+        A.ChannelDropout(channel_drop_range=(1, 1), p=0.3),
+    ], p=0.2),
+    A.OneOf([
+        A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.8),
+        A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.8),
+        A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.8),
+        A.RandomGamma(gamma_limit=(80, 120), p=0.8),
+    ], p=0.7),
+    A.GaussianBlur(blur_limit=(3, 7), p=0.5),
+    A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.5, p=1.0),
+    A.GaussNoise(var_limit=(10.0, 50.0), p=0.5),
+    #A.Normalize(),
+])
 
-def generate_data(in_dir, out_dir, transformations):
-    print(f'Generating extrapolated data from {in_dir} to {out_dir}...')
+def generate_data(in_dir, train_dir, test_dir):
+    print(f'Generating extrapolated data from {in_dir}...')
     #* Clear output directory
-    if os.path.exists(out_dir):
-        shutil.rmtree(out_dir)
-    os.makedirs(out_dir)
+    if os.path.exists(train_dir):
+        shutil.rmtree(train_dir)
+    os.makedirs(train_dir)
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
+    os.makedirs(test_dir)
+
 
     for path, subdirs, filenames in os.walk(in_dir):
-        out_dir_equivalent = os.path.join(out_dir, os.path.relpath(path, in_dir))
-        print(f'Processing folder: {path} out {out_dir_equivalent}')
-        os.makedirs(out_dir_equivalent, exist_ok=True)
+        train_dir_equivalent = os.path.join(train_dir, os.path.relpath(path, in_dir))
+        test_dir_equivalent = os.path.join(test_dir, os.path.relpath(path, in_dir))
+        print(f'Processing folder: {path}')
+        os.makedirs(train_dir_equivalent, exist_ok=True)
+        os.makedirs(test_dir_equivalent, exist_ok=True)
         for filename in filenames:
-            run_transformations(os.path.join(path, filename), out_dir_equivalent, transformations)
+            run_transformations(os.path.join(path, filename), train_dir_equivalent, test_dir_equivalent)
 
-def run_transformations(image_path, out_dir, transformations, img_size=(64,64)):
+def run_transformations(image_path, train_dir, test_dir, transformations = TRANSFORMATIONS):
+    if not image_path.lower().endswith(('.jpg', '.png')):
+        return
     name, ext = os.path.splitext(os.path.basename(image_path))
-    print(f'Creating {transformations} transformations of image {image_path} into {out_dir}...')
+
+    print(f'Creating {transformations} transformations of image {image_path}...')
 
     image_data = cv2.imread(image_path)
+    if image_data is not None:
+        image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
+    # Apply transformations to image data
     for i in range(transformations):
+        out_dir = test_dir if i < transformations * TEST_RATIO else train_dir
+        augmented = seq(image=image_data)['image']
         transformation_filename = f'{name}-transformed_{i:04d}{ext}'
         transformation_path = os.path.join(out_dir, transformation_filename)
-        transformed_data = transform_image_data(image_data)
-        cv2.imwrite(transformation_path, transformed_data)
-
-def transform_image_data(data):
-    # Apply transformations to image data
-    #TODO actually apply transformations
-    return data
+        
+        #augmented = (augmented * 255).clip(0, 255).astype('uint8')
+        augmented = cv2.cvtColor(augmented, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(transformation_path, augmented)
 
 # endregion
 
 # region Train Model
 
-def train_model(data_dir, out_path):
-    print(f'Training model from data in {data_dir} and exporting to {out_path}...')
-    #TODO actually train model
+def train_model(train_dir, test_dir, out_path):
+    print(f'TRAIN MODEL STEP')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    train_features, train_labels = extract_hog_features(train_dir)
+    print(f'Training model from data in {train_dir} and exporting to {out_path}...')
+    svm = train_svm(train_features, train_labels)
+    svm.save(out_path)
 
+    print(f'TESTING STEP')
+    test_features, test_labels = extract_hog_features(test_dir)
+    print("Evaluating SVM model with test data from {test_dir}...")
+    accuracy = evaluate_svm(svm, test_features, test_labels)
+    print(f'Test accuracy: {accuracy:.2f}')
+
+def extract_hog_features(image_folder, win_size=(TARGET_SIZE, TARGET_SIZE), block_size=(16, 16), block_stride=(8, 8), cell_size=(8, 8), nbins=9):
+    print("Extracting HOG features from {image_folder}...")
+    hog = cv2.HOGDescriptor(win_size, block_size, block_stride, cell_size, nbins)
+    features = []
+    labels = []
+
+    for category_folder in glob.glob(os.path.join(image_folder, '*')):
+        category = os.path.basename(category_folder)
+        for image_path in glob.glob(os.path.join(category_folder, '*.jpg')) + glob.glob(os.path.join(category_folder, '*.png')):
+            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+            feature = hog.compute(image)
+            features.append(feature)
+            labels.append(category)
+
+    features = np.array(features).squeeze()
+    labels = np.array(labels)
+
+    #* See https://stackoverflow.com/questions/78767468/python-errors-when-calling-cv2-ml-traindata-create-responses-data-type
+    labels_unique = np.unique(labels)
+    labels_int = labels.copy()
+    i=0
+    for unique_label in labels_unique:
+        print(str(i)+': '+unique_label)
+        labels_int[labels == unique_label] = i
+        i += 1
+    labels_int = labels_int.astype(np.int32)
+
+    return features, labels_int
+
+#* Read https://www.opencvhelp.org/tutorials/deep-learning/training-models/
+def train_svm(train_features, train_labels, kernel=cv2.ml.SVM_LINEAR):
+    svm = cv2.ml.SVM_create()
+    svm.setType(cv2.ml.SVM_C_SVC)
+    svm.setKernel(kernel)
+    train_data = cv2.ml.TrainData_create(train_features, cv2.ml.ROW_SAMPLE, train_labels)
+    svm.train(train_data)
+
+    return svm
+
+def evaluate_svm(svm, test_features, test_labels):
+    predicted_labels = svm.predict(test_features)[1].ravel()
+    accuracy = np.mean(predicted_labels == test_labels)
+    return accuracy
 
 # endregion
 
 # region Main Execution
 
 if str(args.generate) != '':
-    generate_data(str(args.generate), str(args.directory), int(args.transformations))
+    generate_data(str(args.generate), str(args.directory), str(args.test_directory))
 
 if not args.skip_training:
-    train_model(str(args.directory), str(args.output))
+    train_model(str(args.directory), str(args.test_directory), str(args.output))
+
+print("Done.")
 
 # endregion
