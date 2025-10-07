@@ -24,7 +24,7 @@ args = parser.parse_args()
 
 # region Variables
 
-TARGET_SIZE = 64
+TARGET_SIZE = 128
 TRANSFORMATIONS = 1000
 TEST_RATIO = 0.2
 
@@ -60,11 +60,12 @@ seq = A.Compose([
     ], p=0.7),
     A.GaussianBlur(blur_limit=(3, 7), p=0.5),
     A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.5, p=1.0),
-    A.GaussNoise(p=0.5),
+    # A.GaussNoise(p=0.5),
     #A.Normalize(),
 ])
 
 def generate_data(in_dir, train_dir, test_dir):
+    print("GENERATE DATA STEP")
     print(f'Generating extrapolated data from {in_dir}...')
     #* Clear output directory
     if os.path.exists(train_dir):
@@ -78,18 +79,19 @@ def generate_data(in_dir, train_dir, test_dir):
     for path, subdirs, filenames in os.walk(in_dir):
         train_dir_equivalent = os.path.join(train_dir, os.path.relpath(path, in_dir))
         test_dir_equivalent = os.path.join(test_dir, os.path.relpath(path, in_dir))
-        print(f'Processing folder: {path}')
         os.makedirs(train_dir_equivalent, exist_ok=True)
         os.makedirs(test_dir_equivalent, exist_ok=True)
-        for filename in filenames:
+        for i, filename in enumerate(filenames):
+            print(f'\rTransforming images in folder {path}: {i+1} of {len(filenames)}', end="", flush=True)
             run_transformations(os.path.join(path, filename), train_dir_equivalent, test_dir_equivalent)
+        print()
 
 def run_transformations(image_path, train_dir, test_dir, transformations = TRANSFORMATIONS):
     if not image_path.lower().endswith(('.jpg', '.png')):
         return
     name, ext = os.path.splitext(os.path.basename(image_path))
 
-    print(f'Creating {transformations} transformations of image {image_path}...')
+    #print(f'Creating {transformations} transformations of image {image_path}...')
 
     image_data = cv2.imread(image_path)
     if image_data is not None:
@@ -131,11 +133,15 @@ def extract_hog_features(image_folder, win_size=(TARGET_SIZE, TARGET_SIZE), bloc
 
     for category_folder in glob.glob(os.path.join(image_folder, '*')):
         category = os.path.basename(category_folder)
-        for image_path in glob.glob(os.path.join(category_folder, '*.jpg')) + glob.glob(os.path.join(category_folder, '*.png')):
+        image_files = glob.glob(os.path.join(category_folder, '*.jpg')) + glob.glob(os.path.join(category_folder, '*.png'))
+        image_files_length = len(image_files)
+        for i, image_path in enumerate(image_files):
+            print(f'\rExtracting HOG features from category {category}: {i+1} of {image_files_length}', end="", flush=True)
             image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
             feature = hog.compute(image)
             features.append(feature)
             labels.append(category)
+        print()
 
     features = np.array(features).squeeze()
     labels = np.array(labels)
