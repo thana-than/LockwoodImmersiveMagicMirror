@@ -5,6 +5,8 @@ import cv2
 import albumentations as A
 import numpy as np
 import glob
+import subprocess
+import platform
 from sklearn.preprocessing import LabelEncoder
 
 # region Argument Parsing
@@ -24,9 +26,12 @@ args = parser.parse_args()
 
 # region Variables
 
-TARGET_SIZE = 128
+CROP_TARGET_SIZE = 256
+TARGET_SIZE_MULTIPLIER = 2
 TRANSFORMATIONS = 1000
 TEST_RATIO = 0.2
+
+TARGET_RESIZE_MIN = CROP_TARGET_SIZE * TARGET_SIZE_MULTIPLIER
 
 #endregion
 
@@ -34,7 +39,7 @@ TEST_RATIO = 0.2
 
 #* Read https://albumentations.ai/docs/3-basic-usage/choosing-augmentations/
 seq = A.Compose([
-    A.RandomCrop(height=TARGET_SIZE, width=TARGET_SIZE), 
+    A.RandomCrop(height=CROP_TARGET_SIZE, width=CROP_TARGET_SIZE), 
     A.HorizontalFlip(p=0.5),
     A.Affine(
         scale=(0.8, 1.2),
@@ -67,14 +72,10 @@ seq = A.Compose([
 def generate_data(in_dir, train_dir, test_dir):
     print("GENERATE DATA STEP")
     print(f'Generating extrapolated data from {in_dir}...')
-    #* Clear output directory
-    if os.path.exists(train_dir):
-        shutil.rmtree(train_dir)
-    os.makedirs(train_dir)
-    if os.path.exists(test_dir):
-        shutil.rmtree(test_dir)
-    os.makedirs(test_dir)
 
+    #* Clear output directories
+    recreate_dir(train_dir)
+    recreate_dir(test_dir)
 
     for path, subdirs, filenames in os.walk(in_dir):
         train_dir_equivalent = os.path.join(train_dir, os.path.relpath(path, in_dir))
@@ -86,17 +87,42 @@ def generate_data(in_dir, train_dir, test_dir):
             run_transformations(os.path.join(path, filename), train_dir_equivalent, test_dir_equivalent)
         print()
 
+def recreate_dir(dir_path):
+    print(f'Recreating {dir_path}...')
+    if os.path.exists(dir_path):
+        system = platform.system()
+
+        #* Attempt to delete directories through native commands for speed
+        try:
+            if system == "Windows":
+                #* Read https://stackoverflow.com/questions/186737/whats-the-fastest-way-to-delete-a-large-folder-in-windows
+                subprocess.run(["del", "/f", "/s", "/q", dir_path],
+                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["rmdir", "/s", "/q", dir_path],
+                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(["rm", "-rf", dir_path],
+                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            #* Fallback to pure Python if something fails
+            shutil.rmtree(dir_path, ignore_errors=True)
+
+    os.makedirs(dir_path)
+
 def run_transformations(image_path, train_dir, test_dir, transformations = TRANSFORMATIONS):
     if not image_path.lower().endswith(('.jpg', '.png')):
         return
-    name, ext = os.path.splitext(os.path.basename(image_path))
-
-    #print(f'Creating {transformations} transformations of image {image_path}...')
 
     image_data = cv2.imread(image_path)
-    if image_data is not None:
-        image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
-    # Apply transformations to image data
+    height, width = image_data.shape[:2]
+    if height < TARGET_RESIZE_MIN or width < TARGET_RESIZE_MIN:
+        print(f'\nWarning: Image {image_path} is smaller than target size {TARGET_RESIZE_MIN}x{TARGET_RESIZE_MIN}. Resizing.')
+        image_data = cv2.resize(image_data, (max(width, TARGET_RESIZE_MIN), max(height, TARGET_RESIZE_MIN)))
+
+    image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
+
+    name, ext = os.path.splitext(os.path.basename(image_path))
+    #* Apply transformations to image data
     for i in range(transformations):
         out_dir = test_dir if i < transformations * TEST_RATIO else train_dir
         augmented = seq(image=image_data)['image']
@@ -125,7 +151,7 @@ def train_model(train_dir, test_dir, out_path):
     accuracy = evaluate_svm(svm, test_features, test_labels)
     print(f'Test accuracy: {accuracy:.2f}')
 
-def extract_hog_features(image_folder, win_size=(TARGET_SIZE, TARGET_SIZE), block_size=(16, 16), block_stride=(8, 8), cell_size=(8, 8), nbins=9):
+def extract_hog_features(image_folder, win_size=(CROP_TARGET_SIZE, CROP_TARGET_SIZE), block_size=(16, 16), block_stride=(8, 8), cell_size=(8, 8), nbins=9):
     print(f'Extracting HOG features from {image_folder}...')
     hog = cv2.HOGDescriptor(win_size, block_size, block_stride, cell_size, nbins)
     features = []
