@@ -119,12 +119,12 @@ def train_model(train_dir, test_dir, out_path):
 
     print(f'TESTING STEP')
     test_features, test_labels = extract_hog_features(test_dir)
-    print("Evaluating SVM model with test data from {test_dir}...")
+    print(f'Evaluating SVM model with test data from {test_dir}...')
     accuracy = evaluate_svm(svm, test_features, test_labels)
     print(f'Test accuracy: {accuracy:.2f}')
 
 def extract_hog_features(image_folder, win_size=(TARGET_SIZE, TARGET_SIZE), block_size=(16, 16), block_stride=(8, 8), cell_size=(8, 8), nbins=9):
-    print("Extracting HOG features from {image_folder}...")
+    print(f'Extracting HOG features from {image_folder}...')
     hog = cv2.HOGDescriptor(win_size, block_size, block_stride, cell_size, nbins)
     features = []
     labels = []
