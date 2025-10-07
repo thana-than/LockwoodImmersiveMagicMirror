@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser(
     prog=f'python train_model.py',
     description='Training model for Magic Mirror prop used for Lockwood Immersive\'s HES Ball 2025 integration.',
     epilog='Created by Than | https://github.com/thana-than/LockwoodImmersiveMagicMirror')
-parser.add_argument('-g', '--generate', default='', help='Generate extrapolated training data from folder.')
+parser.add_argument('-g', '--generate', default='training_data/raw', help='Generate extrapolated training data from folder.')
 parser.add_argument('-d', '--directory', default='training_data/train', help='Directory of training data.')
 parser.add_argument('-t', '--test-directory', default='training_data/test', help='Directory of testing data.')
 parser.add_argument('-o', '--output', default='training_data/model.xml', help='Location to output model file.')
@@ -60,7 +60,7 @@ seq = A.Compose([
     ], p=0.7),
     A.GaussianBlur(blur_limit=(3, 7), p=0.5),
     A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.5, p=1.0),
-    A.GaussNoise(var_limit=(10.0, 50.0), p=0.5),
+    A.GaussNoise(p=0.5),
     #A.Normalize(),
 ])
 
