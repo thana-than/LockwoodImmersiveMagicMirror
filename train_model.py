@@ -7,6 +7,7 @@ import numpy as np
 import glob
 import subprocess
 import platform
+import json
 from sklearn.preprocessing import LabelEncoder
 
 # region Argument Parsing
@@ -24,22 +25,79 @@ args = parser.parse_args()
 
 # endregion
 
-# region Variables
+# region JSON Configuration
+P_CROP_SIZE = 'crop_size'
+P_MIN_SIZE = 'min_size'
+P_TRANSFORMATIONS = 'transformations'
+P_TEST_RATIO = 'test_ratio'
 
-CROP_TARGET_SIZE = 256
-TARGET_SIZE_MULTIPLIER = 2
-TRANSFORMATIONS = 1000
-TEST_RATIO = 0.2
+DEFAULT_ONLY_PROPERTIES = [P_CROP_SIZE, P_MIN_SIZE]
 
-TARGET_RESIZE_MIN = CROP_TARGET_SIZE * TARGET_SIZE_MULTIPLIER
+DEFAULT_JSON_DATA = {
+    "default": {
+        P_CROP_SIZE: 128,
+        P_MIN_SIZE: 256,
+        P_TRANSFORMATIONS: 1000,
+        P_TEST_RATIO: 0.2
+    },
+    "none": {
+        P_TRANSFORMATIONS: 10
+    }
+}
 
-#endregion
+json_file = 'train_model.json'
+
+
+def write_default_json(path):
+    with open(path, 'w') as f:
+        json.dump(DEFAULT_JSON_DATA, f, indent=4)
+    return DEFAULT_JSON_DATA
+
+def read_json(path):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            data = json.load(f)
+    else:
+        data = DEFAULT_JSON_DATA
+    
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=4)
+        
+    
+    return data
+
+def get_channel_property(channel, property_name):
+    #* Try to get property from JSON data, falling back to defaults if not found
+    if channel in json_data:
+        if property_name in json_data[channel]:
+            if property_name not in DEFAULT_ONLY_PROPERTIES:
+                    return json_data[channel][property_name]
+            else:
+                print(f'Warning: Property {property_name} is only allowed in default section. Using default value.')
+            
+    if "default" in json_data:
+        if property_name in json_data["default"]:
+            return json_data["default"][property_name]
+        
+    if channel in DEFAULT_JSON_DATA:
+        if property_name in DEFAULT_JSON_DATA[channel]:
+            if property_name not in DEFAULT_ONLY_PROPERTIES:
+                return DEFAULT_JSON_DATA[channel][property_name]
+        
+    if "default" in DEFAULT_JSON_DATA:
+        if property_name in DEFAULT_JSON_DATA["default"]:
+            return DEFAULT_JSON_DATA["default"][property_name]
+        
+    raise ValueError(f'Property {property_name} not found for channel {channel} or default.')
+    
+# endregion
 
 # region Generate Data
 
 #* Read https://albumentations.ai/docs/3-basic-usage/choosing-augmentations/
-seq = A.Compose([
-    A.RandomCrop(height=CROP_TARGET_SIZE, width=CROP_TARGET_SIZE), 
+def get_augmentation_pipeline(crop_target_size):
+    return A.Compose([
+    A.RandomCrop(height=crop_target_size, width=crop_target_size), 
     A.HorizontalFlip(p=0.5),
     A.Affine(
         scale=(0.8, 1.2),
@@ -82,9 +140,18 @@ def generate_data(in_dir, train_dir, test_dir):
         test_dir_equivalent = os.path.join(test_dir, os.path.relpath(path, in_dir))
         os.makedirs(train_dir_equivalent, exist_ok=True)
         os.makedirs(test_dir_equivalent, exist_ok=True)
+
+        #* Determine channel properties from JSON data
+        channel = os.path.basename(path)
+        min_size = get_channel_property(channel, P_MIN_SIZE)
+        test_ratio = get_channel_property(channel, P_TEST_RATIO)
+        transformations = get_channel_property(channel, P_TRANSFORMATIONS)
+        crop_size = get_channel_property(channel, P_CROP_SIZE)
+        augmentation_pipeline = get_augmentation_pipeline(crop_size)
+
         for i, filename in enumerate(filenames):
             print(f'\rTransforming images in folder {path}: {i+1} of {len(filenames)}', end="", flush=True)
-            run_transformations(os.path.join(path, filename), train_dir_equivalent, test_dir_equivalent)
+            run_transformations(os.path.join(path, filename), train_dir_equivalent, test_dir_equivalent, min_size, test_ratio, transformations, augmentation_pipeline)
         print()
 
 def recreate_dir(dir_path):
@@ -109,27 +176,30 @@ def recreate_dir(dir_path):
 
     os.makedirs(dir_path)
 
-def run_transformations(image_path, train_dir, test_dir, transformations = TRANSFORMATIONS):
+def run_transformations(image_path, train_dir, test_dir, min_size, test_ratio, transformations, augmentation_pipeline):
     if not image_path.lower().endswith(('.jpg', '.png')):
         return
 
     image_data = cv2.imread(image_path)
+    if image_data is None:
+        print(f'\nWarning: Unable to read image {image_path}. Skipping.')
+        return
+    
     image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
     
     height, width = image_data.shape[:2]
-    if height < TARGET_RESIZE_MIN or width < TARGET_RESIZE_MIN:
-        print(f'\nWarning: Image {image_path} is smaller than target size {TARGET_RESIZE_MIN}x{TARGET_RESIZE_MIN}. Resizing.')
-        image_data = cv2.resize(image_data, (max(width, TARGET_RESIZE_MIN), max(height, TARGET_RESIZE_MIN)))
+    if height < min_size or width < min_size:
+        print(f'\nWarning: Image {image_path} is smaller than target size {min_size}x{min_size}. Resizing.')
+        image_data = cv2.resize(image_data, (max(width, min_size), max(height, min_size)))
 
     name, ext = os.path.splitext(os.path.basename(image_path))
     #* Apply transformations to image data
     for i in range(transformations):
-        out_dir = test_dir if i < transformations * TEST_RATIO else train_dir
-        augmented = seq(image=image_data)['image']
+        out_dir = test_dir if i < transformations * test_ratio else train_dir
+        augmented = augmentation_pipeline(image=image_data)['image']
         transformation_filename = f'{name}-transformed_{i:04d}{ext}'
         transformation_path = os.path.join(out_dir, transformation_filename)
         
-        #augmented = (augmented * 255).clip(0, 255).astype('uint8')
         augmented = cv2.cvtColor(augmented, cv2.COLOR_RGB2BGR)
         cv2.imwrite(transformation_path, augmented)
 
@@ -151,9 +221,10 @@ def train_model(train_dir, test_dir, out_path):
     accuracy = evaluate_svm(svm, test_features, test_labels)
     print(f'Test accuracy: {accuracy:.2f}')
 
-def extract_hog_features(image_folder, win_size=(CROP_TARGET_SIZE, CROP_TARGET_SIZE), block_size=(16, 16), block_stride=(8, 8), cell_size=(8, 8), nbins=9):
+def extract_hog_features(image_folder, block_size=(16, 16), block_stride=(8, 8), cell_size=(8, 8), nbins=9):
     print(f'Extracting HOG features from {image_folder}...')
-    hog = cv2.HOGDescriptor(win_size, block_size, block_stride, cell_size, nbins)
+    crop_size = get_channel_property('default', P_CROP_SIZE)
+    hog = cv2.HOGDescriptor((crop_size, crop_size), block_size, block_stride, cell_size, nbins)
     features = []
     labels = []
 
@@ -202,6 +273,8 @@ def evaluate_svm(svm, test_features, test_labels):
 # endregion
 
 # region Main Execution
+
+json_data = read_json(json_file)
 
 if str(args.generate) != '':
     generate_data(str(args.generate), str(args.directory), str(args.test_directory))
