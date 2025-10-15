@@ -19,8 +19,9 @@ parser = argparse.ArgumentParser(
 parser.add_argument('-g', '--generate', default='training_data/raw', help='Generate extrapolated training data from folder.')
 parser.add_argument('-d', '--directory', default='training_data/train', help='Directory of training data.')
 parser.add_argument('-t', '--test-directory', default='training_data/test', help='Directory of testing data.')
-parser.add_argument('-o', '--output', default='training_data/model.xml', help='Location to output model file.')
+parser.add_argument('-m', '--model-directory', default='model', help='Location of model directory. Includes model, HOG descriptor, and features.')
 parser.add_argument('-s', '--skip-training', action='store_true', default=False, help='Skip model training step.')
+parser.add_argument('--regenerate-hog', action='store_true', default=False, help='Regenerate HOG descriptor and features.')
 args = parser.parse_args()
 
 # endregion
@@ -31,14 +32,33 @@ P_MIN_SIZE = 'min_size'
 P_TRANSFORMATIONS = 'transformations'
 P_TEST_RATIO = 'test_ratio'
 
-DEFAULT_ONLY_PROPERTIES = [P_CROP_SIZE, P_MIN_SIZE]
+P_HOG_BLOCK_SIZE = 'hog_block_size'
+P_HOG_BLOCK_STRIDE = 'hog_block_stride'
+P_HOG_CELL_SIZE = 'hog_cell_size'
+P_HOG_NBINS = 'hog_nbins'
+
+GENERATE_IMAGES = str(args.generate) != ''
+
+MODEL_DIR = str(args.model_directory)
+MODEL_PATH = os.path.join(MODEL_DIR, 'svm_model.xml')
+HOG_DESCRIPTOR_PATH = os.path.join(MODEL_DIR, 'hog_descriptor.xml')
+def get_features_path(feature_type):
+    return os.path.join(MODEL_DIR, f'{feature_type}_features.npz')
+
+
+DEFAULT_ONLY_PROPERTIES = [P_CROP_SIZE, P_MIN_SIZE, P_HOG_BLOCK_SIZE, P_HOG_BLOCK_STRIDE, P_HOG_CELL_SIZE, P_HOG_NBINS]
 
 DEFAULT_JSON_DATA = {
     "default": {
         P_CROP_SIZE: 128,
         P_MIN_SIZE: 256,
+        P_HOG_BLOCK_SIZE: [16, 16],
+        P_HOG_BLOCK_STRIDE: [8, 8],
+        P_HOG_CELL_SIZE: [8, 8],
+        P_HOG_NBINS: 9,
         P_TRANSFORMATIONS: 1000,
-        P_TEST_RATIO: 0.2
+        P_TEST_RATIO: 0.2,
+
     },
     "none": {
         P_TRANSFORMATIONS: 10
@@ -208,23 +228,63 @@ def run_transformations(image_path, train_dir, test_dir, min_size, test_ratio, t
 # region Train Model
 
 def train_model(train_dir, test_dir, out_path):
+    hog, fresh= get_hog_descriptor()
+    
     print(f'TRAIN MODEL STEP')
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    train_features, train_labels = extract_hog_features(train_dir)
-    print(f'Training model from data in {train_dir} and exporting to {out_path}...')
+    train_features, train_labels = get_hog_features(hog, train_dir, fresh)
+    print(f'Training model from data in {train_dir}...')
     svm = train_svm(train_features, train_labels)
+    print(f'Saving svm model to {out_path}...')
     svm.save(out_path)
 
     print(f'TESTING STEP')
-    test_features, test_labels = extract_hog_features(test_dir)
+    test_features, test_labels = get_hog_features(hog, test_dir, fresh)
     print(f'Evaluating SVM model with test data from {test_dir}...')
     accuracy = evaluate_svm(svm, test_features, test_labels)
     print(f'Test accuracy: {accuracy:.2f}')
 
-def extract_hog_features(image_folder, block_size=(16, 16), block_stride=(8, 8), cell_size=(8, 8), nbins=9):
-    print(f'Extracting HOG features from {image_folder}...')
+def get_hog_descriptor():
+    if GENERATE_IMAGES or args.regenerate_hog or not os.path.exists(HOG_DESCRIPTOR_PATH):
+        hog = build_hog_descriptor()
+        print(f'Saving HOG Descriptor to {HOG_DESCRIPTOR_PATH}...')
+        hog.save(HOG_DESCRIPTOR_PATH)
+        fresh = True
+    else:
+        print(f'Loading HOG Descriptor from {HOG_DESCRIPTOR_PATH}...')
+        hog = cv2.HOGDescriptor(HOG_DESCRIPTOR_PATH)
+        fresh = False
+    return hog, fresh
+
+def build_hog_descriptor():
     crop_size = get_channel_property('default', P_CROP_SIZE)
+    block_size=get_channel_property('default', P_HOG_BLOCK_SIZE)
+    block_stride=get_channel_property('default', P_HOG_BLOCK_STRIDE)
+    cell_size=get_channel_property('default', P_HOG_CELL_SIZE)
+    nbins=get_channel_property('default', P_HOG_NBINS)
+
     hog = cv2.HOGDescriptor((crop_size, crop_size), block_size, block_stride, cell_size, nbins)
+    print(f'Built new HOG Descriptor with win size {crop_size}, block size {block_size}, block stride {block_stride}, cell size {cell_size}, and {nbins} bins.')
+
+    return hog
+
+def get_hog_features(hog, image_folder, require_regen=False):
+    features_type = os.path.basename(image_folder)
+    feature_path = get_features_path(features_type)
+    print(f'Getting HOG features for {features_type} data...')
+    if require_regen or not os.path.exists(feature_path):
+        features, labels = extract_hog_features(hog, image_folder)
+        print(f'Saving {features_type} features to {feature_path}...')
+        np.savez_compressed(feature_path, features=features, labels=labels)
+    else:
+        print(f'Loading {features_type} features and labels from {feature_path}...')
+        data = np.load(feature_path)
+        features = data['features']
+        labels = data['labels']
+
+    return features, labels
+
+def extract_hog_features(hog, image_folder):
+    print(f'Extracting HOG features from {image_folder}...')
     features = []
     labels = []
 
@@ -236,11 +296,11 @@ def extract_hog_features(image_folder, block_size=(16, 16), block_stride=(8, 8),
             print(f'\rExtracting HOG features from category {category}: {i+1} of {image_files_length}', end="", flush=True)
             image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
             feature = hog.compute(image)
-            features.append(feature)
+            features.append(feature.flatten())
             labels.append(category)
         print()
 
-    features = np.array(features).squeeze()
+    features = np.array(features, dtype=np.float32)
     labels = np.array(labels)
 
     #* See https://stackoverflow.com/questions/78767468/python-errors-when-calling-cv2-ml-traindata-create-responses-data-type
@@ -256,12 +316,15 @@ def extract_hog_features(image_folder, block_size=(16, 16), block_stride=(8, 8),
     return features, labels_int
 
 #* Read https://www.opencvhelp.org/tutorials/deep-learning/training-models/
-def train_svm(train_features, train_labels, kernel=cv2.ml.SVM_LINEAR):
+#* And https://machinelearningmastery.com/opencv_object_detection/
+def train_svm(train_features, train_labels):
     svm = cv2.ml.SVM_create()
     svm.setType(cv2.ml.SVM_C_SVC)
-    svm.setKernel(kernel)
-    train_data = cv2.ml.TrainData_create(train_features, cv2.ml.ROW_SAMPLE, train_labels)
-    svm.train(train_data)
+    svm.setKernel(cv2.ml.SVM_RBF)
+    svm.setC(1.0)
+    svm.setGamma(0.1)
+    svm.setTermCriteria((cv2.TERM_CRITERIA_MAX_ITER + cv2.TERM_CRITERIA_EPS, 10000, 1e-6))
+    svm.train(train_features, cv2.ml.ROW_SAMPLE, train_labels)
 
     return svm
 
@@ -276,11 +339,12 @@ def evaluate_svm(svm, test_features, test_labels):
 
 json_data = read_json(json_file)
 
-if str(args.generate) != '':
+if GENERATE_IMAGES:
     generate_data(str(args.generate), str(args.directory), str(args.test_directory))
 
 if not args.skip_training:
-    train_model(str(args.directory), str(args.test_directory), str(args.output))
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    train_model(str(args.directory), str(args.test_directory), MODEL_PATH)
 
 print("Done.")
 

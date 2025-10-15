@@ -53,7 +53,6 @@ DEFAULT_JSON_SCHEMA = {
     "aruco_id": 0,
 }
 
-##TODO validation to rewrite file if values don't exist
 DEFAULT_JSON_DATA =[
         {
             "display_color": "#0000FF",
@@ -136,9 +135,8 @@ WINDOW_SIZE = (int(args.window[0]), int(args.window[1]))
 detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
 detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
 
-DETECTION_THRESHOLD =  8 # thresholds that eliminate false positives, lower if face detection is spotty
-FACE_SIZE = 40 # minimum allowed face size
-VIDEO_SCALE_FACTOR = 1.0 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
+DETECTION_THRESHOLD =  2 # thresholds that eliminate false positives, lower if detection is spotty
+VIDEO_SCALE_FACTOR = 1.2 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
 
 clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
 check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
@@ -153,10 +151,12 @@ bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
 ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
 
-face_classifier = cv2.CascadeClassifier(
-    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-)
+# face_classifier = cv2.CascadeClassifier(
+#     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+# )
 
+
+model_classifier = cv2.CascadeClassifier('res/cascade.xml')
 app = None
 
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
@@ -195,8 +195,9 @@ def hex_to_hsv_bounds(hex_color, threshold=40):
 
 def detect_bounding_box(video_frame, classifier):
     gray_image = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY) # Greyscale for optimized detection
-    faces = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
-    return faces
+    #bounding_boxes = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
+    bounding_boxes = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD)
+    return bounding_boxes
 
 def find_orb_bounds(kp_template, des_template, kp_frame, des_frame, match_dist = 50, match_threshold = 10):
     if des_frame is not None and len(des_frame) > 0:
@@ -269,11 +270,11 @@ def play_incorrect_video():
 def on_face_state_change(face_state):
     return
 
-def debug_draw_detection(video_frame, faces):
+def debug_draw_detection(video_frame, items):
     if DEBUG is False:
         return video_frame
-    
-    for (x, y, w, h) in faces:
+    for bounds in items:
+        x,y,w,h = bounds
         cv2.rectangle(video_frame, (x, y), (x + w, y + h), (0, 255, 0), 4)
     return video_frame
 
@@ -411,7 +412,7 @@ class CV2_Render(Video_Render):
         
 
 class CV2_Detection(CV2_Render):    
-    def __init__(self, source, x = 0, y = 0, classifier = face_classifier):
+    def __init__(self, source, x = 0, y = 0, classifier = model_classifier):
         super().__init__(source, x, y)
         self.prev_time = time.time()
         self.detect_time = 0
@@ -717,8 +718,8 @@ if __name__ == "__main__":
     
     app = App(root, size=WINDOW_SIZE)
     
-    #app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=face_classifier))
-    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file)))
+    app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=model_classifier))
+    #app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file)))
 
     root.mainloop()
 
