@@ -135,7 +135,7 @@ WINDOW_SIZE = (int(args.window[0]), int(args.window[1]))
 detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
 detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
 
-DETECTION_THRESHOLD =  2 # thresholds that eliminate false positives, lower if detection is spotty
+DETECTION_THRESHOLD =  4 # thresholds that eliminate false positives, lower if detection is spotty
 VIDEO_SCALE_FACTOR = 1.2 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
 
 clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
