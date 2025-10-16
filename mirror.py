@@ -14,8 +14,6 @@ import socket
 PROJECT_NAME = 'Magic Mirror'
 
 #TODO clean up
-#TODO update readme
-#TODO aruco id to just candle_id (also in godot)
 
 # region Argument Parsing
 
@@ -28,6 +26,7 @@ parser.add_argument('-d', '--debug', action='store_true', default=False, help='S
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
 parser.add_argument('-p', '--port', default=5005, help='Port where sequencing data is sent. Useful for external rendering.')
 parser.add_argument('-w', '--window', default=(1920, 1080), nargs=2, metavar=('WIDTH', 'HEIGHT'), help='Set the desired Window Size. Defaults to 1920 1080.')
+parser.add_argument('-m', '--model', default='res/cascade.xml', help='Path to the cascade model used in image detection.')
 args = parser.parse_args()
 
 # endregion
@@ -44,8 +43,11 @@ PORT = int(args.port)
 # region JSON File
 
 DEFAULT_JSON_SCHEMA = {
+    "label": "blue",
     "display_color": "#0000FF",
-    "aruco_id": 0,
+    "detect_colors": [
+        "#0078FD",
+    ]
 }
 
 DEFAULT_JSON_DATA =[
@@ -67,7 +69,6 @@ DEFAULT_JSON_DATA =[
                 "#93D3F8",
                 "#D0FBFA",
             ],
-            "aruco_id": 0,
         },
         {
             "label": "red",
@@ -80,7 +81,6 @@ DEFAULT_JSON_DATA =[
                 "#FCF491",
                 "#FBBB6D"
             ],
-            "aruco_id": 1,
         },
         {
             "label": "green",
@@ -105,7 +105,6 @@ DEFAULT_JSON_DATA =[
                 "#E7FBFD",
                 "#C9FCFD"
             ],
-            "aruco_id": 2,
         },
     ]
 
@@ -140,7 +139,7 @@ def load_candles_from_json(path):
     candles = []
     for i in range(len(data)):
         obj = data[i]
-        candles.append(Candle(obj["display_color"], obj["detect_colors"], int(obj["aruco_id"])))
+        candles.append(Candle(obj["display_color"], obj["detect_colors"]))
 
     with open(path, 'w') as f:
         json.dump(data, f, indent=4)
@@ -520,14 +519,12 @@ class CV2_Detection(CV2_Render):
 # region Candle Sequencing
 
 class Candle():
-    def __init__(self, display_color, detect_colors, id):
+    def __init__(self, display_color, detect_colors):
         self.display_color = ImageColor.getcolor(display_color, "RGB")
         self.detect_colors = [ImageColor.getcolor(color, "RGB") for color in detect_colors]
         self.lab_colors = [to_lab((rgb[2], rgb[1], rgb[0])) for rgb in self.detect_colors]
         self.detection = 0
         self.bounds = (0,0,0,0)
-
-        self.aruco_id = id
 
     def get_data(self):
         return {
