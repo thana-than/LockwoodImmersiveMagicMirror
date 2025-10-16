@@ -43,25 +43,69 @@ python mirror.py --debug
   -f FPS, --fps FPS                         Set the desired Frames Per Second. Defaults to 30.
   -p PORT, --port PORT                      Port where sequencing data is sent. Useful for external rendering.
   -w WIDTH HEIGHT, --window WIDTH HEIGHT    Set the desired Window Size. Defaults to 1920 1080.
+  -m MODEL, --model MODEL                   Path to the cascade model used in image detection.
    ```
 ## Json Configuration
 Array is in order of correct candle sequence. </br>
 `candles.json` *(will appear after first run)*
 ```
 [
-    {
-        "display_color": "#0000FF",          Color for debugging.
-        "aruco_id": 0                        ID on the visible aruco tag.
-    },
-    {
-        "display_color": "#FF0000",
-        "aruco_id": 1
-    },
-    {
-        "display_color": "#00FF00",
-        "aruco_id": 2
-    }
-]
+        {
+            "label": "blue",                Name for debugging only.
+            "display_color": "#0000FF",   Color for debugging.
+            "detect_colors": [              Colors used to determine which candle is in view. Ideal to have lots of color samples.
+                "#0078FD",
+                "#0037AC",
+                "#017CFE",
+                "#03AEFE",
+                "#0044C3",
+                "#006CFB",
+                "#003BA9",
+                "#0045BC",
+                "#D2F8FB",
+                "#B4D9FC",
+                "#CAFBFD",
+                "#93D3F8",
+                "#D0FBFA",
+            ],
+        },
+        {
+            "label": "red",
+            "display_color": "#FF0000",
+            "detect_colors": [
+                "#F40700",
+                "#970700",
+                "#8B0600",
+                "#FD9A39",
+                "#FCF491",
+                "#FBBB6D"
+            ],
+        },
+        {
+            "label": "green",
+            "display_color": "#00FF00",
+            "detect_colors": [
+                "#03E572",
+                "#00A04A",
+                "#00914A",
+                "#005829",
+                "#03E773",
+                "#86FABD",
+                "#80D69C",
+                "#9EFBFB",
+                "#74FDDE",
+                "#6DE9B0",
+                "#A1FACA",
+                "#E1FCFC",
+                "#629270",
+                "#7CC091",
+                "#68F7C3",
+                "#F7FDFD",
+                "#E7FBFD",
+                "#C9FCFD"
+            ],
+        },
+    ]
 ```
 ## Extra Configuration
 `config.ini` *(will appear after first run)*
@@ -69,6 +113,8 @@ Array is in order of correct candle sequence. </br>
 [DETECTION]
 detection_build_speed = 3.0                 The speed at which a target is counted as detected.
 detection_reduce_speed = 1.0                The speed at which a target is removed from detection (when out of view).
+detection_threshold = 4                     Thresholds that eliminate false positives, higher means harsher threshold. Lower if detection is spotty.
+detection_videoscalefactor = 1.2            Reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
 ```
 ## Contact
 
@@ -92,5 +138,3 @@ Distributed under the MIT License. See `LICENSE.txt` for more information.
 * [NumPy](https://pypi.org/project/numpy/)
 * [OpenCV](https://pypi.org/project/opencv_python/)
 * [Pillow](https://pypi.org/project/Pillow/)
-* [Debug Clock Icon](https://www.flaticon.com/free-icon/clock_2838590?term=clock&page=1&position=32&origin=search&related_id=2838590)
-* [Debug Checkmark Icon](https://www.flaticon.com/free-icon/check_14090371?term=check+mark&page=1&position=6&origin=tag&related_id=14090371)

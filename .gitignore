@@ -1,4 +1,7 @@
+**features.npz
+cascade_trainer
 candles.json
+train_model.json
 training_data
 svm_model.xml
 # Byte-compiled / optimized / DLL files
