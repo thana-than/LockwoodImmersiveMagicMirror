@@ -11,16 +11,11 @@ import json
 import os
 import socket
 
-#TODO phase out config?
-#TODO test on laptop, other environments
-
-#TODO video speed (framerate?) fix
-#TODO render scaling
-# Old TODOS
-## cleaner call for video overlay (currently in on_face_state_change)
-## video position and scaling based on position of object (?) (probably wont work with mirror surface perspective)
-
 PROJECT_NAME = 'Magic Mirror'
+
+#TODO clean up
+#TODO update readme
+#TODO aruco id to just candle_id (also in godot)
 
 # region Argument Parsing
 
@@ -55,15 +50,61 @@ DEFAULT_JSON_SCHEMA = {
 
 DEFAULT_JSON_DATA =[
         {
+            "label": "blue",
             "display_color": "#0000FF",
+            "detect_colors": [
+                "#0078FD",
+                "#0037AC",
+                "#017CFE",
+                "#03AEFE",
+                "#0044C3",
+                "#006CFB",
+                "#003BA9",
+                "#0045BC",
+                "#D2F8FB",
+                "#B4D9FC",
+                "#CAFBFD",
+                "#93D3F8",
+                "#D0FBFA",
+            ],
             "aruco_id": 0,
         },
         {
+            "label": "red",
             "display_color": "#FF0000",
+            "detect_colors": [
+                "#F40700",
+                "#970700",
+                "#8B0600",
+                "#FD9A39",
+                "#FCF491",
+                "#FBBB6D"
+            ],
             "aruco_id": 1,
         },
         {
+            "label": "green",
             "display_color": "#00FF00",
+            "detect_colors": [
+                "#03E572",
+                "#00A04A",
+                "#00914A",
+                "#005829",
+                "#03E773",
+                "#86FABD",
+                "#80D69C",
+                "#9EFBFB",
+                "#74FDDE",
+                "#6DE9B0",
+                "#A1FACA",
+                "#E1FCFC",
+                "#629270",
+                "#7CC091",
+                "#68F7C3",
+                "#F7FDFD",
+                "#E7FBFD",
+                "#C9FCFD"
+            ],
             "aruco_id": 2,
         },
     ]
@@ -99,7 +140,7 @@ def load_candles_from_json(path):
     candles = []
     for i in range(len(data)):
         obj = data[i]
-        candles.append(Candle(obj["display_color"], int(obj["aruco_id"])))
+        candles.append(Candle(obj["display_color"], obj["detect_colors"], int(obj["aruco_id"])))
 
     with open(path, 'w') as f:
         json.dump(data, f, indent=4)
@@ -161,21 +202,17 @@ ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
 model_classifier = cv2.CascadeClassifier('res/cascade.xml')
 app = None
 
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-parameters = cv2.aruco.DetectorParameters()
-detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
 # endregion
 
 # region Methods
 
 
 
-def to_lab(rgb):
-    # OpenCV expects images in BGR order, so reverse the tuple
-    bgr = numpy.uint8([[list(rgb[::-1])]])  # shape (1,1,3)
-    # Convert to Lab
-    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+def to_lab(bgr):
+    bgr = numpy.uint8([[bgr]])
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)[0][0]
     return lab
+
 def hex_to_hsv_bounds(hex_color, threshold=40):
     hex_color = hex_color.lstrip('#')
     rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
@@ -197,9 +234,28 @@ def hex_to_hsv_bounds(hex_color, threshold=40):
 
 def detect_bounding_box(video_frame, classifier):
     gray_image = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY) # Greyscale for optimized detection
-    #bounding_boxes = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
     bounding_boxes = classifier.detectMultiScale(gray_image, detection_video_scale_factor, detection_threshold)
     return bounding_boxes
+
+def scale_rect(rect, percent):
+    x,y,w,h = rect
+
+    c_x = x + w / 2
+    c_y = y + h / 2
+
+    w = int(w * percent)
+    h = int(h * percent)
+
+    x = int(c_x - w / 2)
+    y = int(c_y - h / 2)
+
+    return (x,y,w,h)
+
+def sample_color_in_bounds(video_frame, bounds): #, brightness_threshold=210):
+    x, y, w, h = bounds
+    roi = video_frame[y : y + h, x : x + w]
+    avg_color = numpy.mean(roi, axis=(0,1))
+    return avg_color.astype(int).tolist()
 
 def find_orb_bounds(kp_template, des_template, kp_frame, des_frame, match_dist = 50, match_threshold = 10):
     if des_frame is not None and len(des_frame) > 0:
@@ -244,15 +300,17 @@ def find_color_bounds(in_color, low, high):
 
     return None
 
-def debug_draw_rect_bounds(video_frame, bounds, draw_color):
+def debug_draw_rect_bounds_rgb(video_frame, bounds, draw_color):
+    debug_draw_rect_bounds_bgr(video_frame, bounds, (draw_color[2], draw_color[1], draw_color[0]))
+
+def debug_draw_rect_bounds_bgr(video_frame, bounds, draw_color):
     if not DEBUG:
         return
     x = bounds[0]
     y = bounds[1]
     w = bounds[2]
     h = bounds[3]
-    color = (draw_color[2], draw_color[1], draw_color[0])
-    cv2.rectangle(video_frame, (x,y), (x+w,y+h), color, 2)
+    cv2.rectangle(video_frame, (x,y), (x+w,y+h), draw_color, 2)
 
 def face_detected_update(video_frame, faces):
     return video_frame
@@ -462,13 +520,14 @@ class CV2_Detection(CV2_Render):
 # region Candle Sequencing
 
 class Candle():
-    def __init__(self, color, aruco_id):
-        self.color = ImageColor.getcolor(color, "RGB")
-        self.display_color = self.color
+    def __init__(self, display_color, detect_colors, id):
+        self.display_color = ImageColor.getcolor(display_color, "RGB")
+        self.detect_colors = [ImageColor.getcolor(color, "RGB") for color in detect_colors]
+        self.lab_colors = [to_lab((rgb[2], rgb[1], rgb[0])) for rgb in self.detect_colors]
         self.detection = 0
         self.bounds = (0,0,0,0)
 
-        self.aruco_id = aruco_id
+        self.aruco_id = id
 
     def get_data(self):
         return {
@@ -478,10 +537,20 @@ class Candle():
         
 
 class CV2_Sequencer(CV2_Render):
-    def __init__(self, source, x = 0, y = 0, candles = []):
+    def __init__(self, source, x = 0, y = 0, classifier = model_classifier, candles = []):
         super().__init__(source, x, y)
 
         self.candles = candles
+
+        # build out color_labs tables
+        labs = []
+        self.candles_lab_index = []
+        for i, candle in enumerate(self.candles):
+            labs += candle.lab_colors
+            self.candles_lab_index += [i] * len(candle.lab_colors)
+        self.candle_labs = numpy.array(labs)
+        self.lab_tests = self.candle_labs # could potentially add "duds" to the end of this array to create color weights that the test should avoid
+
         self.current_sequence = []
         self.last_state_change = 0
 
@@ -490,6 +559,7 @@ class CV2_Sequencer(CV2_Render):
         self.queue_clear = False
 
         self.state_name = "DETECT"
+        self.classifier = classifier
 
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
@@ -525,24 +595,33 @@ class CV2_Sequencer(CV2_Render):
             "order": self.current_sequence,
             "state": self.state_name,
         }
+    
+    
+    def find_closest_candle(self, input_color):
+        # finds the closest candle lab color to the input_color and returns that specific candle
+        input_lab = to_lab(input_color)
+
+        color_labs = self.lab_tests
+        distances = numpy.linalg.norm(color_labs - input_lab, axis=1)
+        i = numpy.argmin(distances)
+        if i >= len(self.candles_lab_index):
+            return None
+        return self.candles[self.candles_lab_index[i]]
 
     def update_candle_bounds(self, video_frame):
-        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
-
-        corners, ids, rejected = detector.detectMarkers(in_color)
+        bounds_collection = detect_bounding_box(video_frame, self.classifier)  # apply the function we created to the video frame 
 
         for candle in self.candles:
             candle.bounds = None
 
-        if ids is None:
-            return
-        
-        ids = ids.flatten()
-        for candle in self.candles:
-            if candle.aruco_id in ids:
-                idx = list(ids).index(candle.aruco_id)
-                pts = corners[idx].reshape((4, 2)).astype(int)
-                candle.bounds = cv2.boundingRect(pts)
+        for bounds in bounds_collection:
+            bounds = scale_rect(bounds, .5)
+
+            avg_color = sample_color_in_bounds(video_frame, bounds)
+            debug_draw_rect_bounds_bgr(video_frame, bounds, avg_color)
+            candle = self.find_closest_candle(avg_color)
+            if candle:
+                candle.bounds = bounds
 
     def candle_detection_step(self, delta_time):                
         for i in range(len(self.candles)):
@@ -576,7 +655,7 @@ class CV2_Sequencer(CV2_Render):
         
         for candle in candles:
             if candle.bounds:
-                debug_draw_rect_bounds(video_frame, candle.bounds, candle.display_color)
+                debug_draw_rect_bounds_rgb(video_frame, candle.bounds, candle.display_color)
 
     def debug_draw_sequence_state(self, video_frame):
         if not DEBUG:
@@ -720,8 +799,7 @@ if __name__ == "__main__":
     
     app = App(root, size=WINDOW_SIZE)
     
-    app.add(CV2_Detection(CAM_DEVICE, x=0,y=0, classifier=model_classifier))
-    #app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file)))
+    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, classifier=model_classifier, candles = load_candles_from_json(json_file)))
 
     root.mainloop()
 
