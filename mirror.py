@@ -116,6 +116,8 @@ config = configparser.ConfigParser()
 config['DETECTION'] = {
     'Detection_Build_Speed': 3.0,
     'Detection_Reduce_Speed': .5,
+    'Detection_Threshold': 4,
+    'Detection_VideoScaleFactor': 1.2,
     }
 
 config.read(config_path)
@@ -135,8 +137,8 @@ WINDOW_SIZE = (int(args.window[0]), int(args.window[1]))
 detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
 detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
 
-DETECTION_THRESHOLD =  4 # thresholds that eliminate false positives, lower if detection is spotty
-VIDEO_SCALE_FACTOR = 1.2 # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
+detection_threshold =  int(config['DETECTION']['Detection_Threshold']) # thresholds that eliminate false positives, lower if detection is spotty
+detection_video_scale_factor = float(config['DETECTION']['Detection_VideoScaleFactor']) # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
 
 clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
 check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
@@ -196,7 +198,7 @@ def hex_to_hsv_bounds(hex_color, threshold=40):
 def detect_bounding_box(video_frame, classifier):
     gray_image = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY) # Greyscale for optimized detection
     #bounding_boxes = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD, minSize=(FACE_SIZE,FACE_SIZE))
-    bounding_boxes = classifier.detectMultiScale(gray_image, VIDEO_SCALE_FACTOR, DETECTION_THRESHOLD)
+    bounding_boxes = classifier.detectMultiScale(gray_image, detection_video_scale_factor, detection_threshold)
     return bounding_boxes
 
 def find_orb_bounds(kp_template, des_template, kp_frame, des_frame, match_dist = 50, match_threshold = 10):
