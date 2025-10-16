@@ -50,62 +50,62 @@ Array is in order of correct candle sequence. </br>
 `candles.json` *(will appear after first run)*
 ```
 [
-        {
-            "label": "blue",                Name for debugging only.
-            "display_color": "#0000FF",   Color for debugging.
-            "detect_colors": [              Colors used to determine which candle is in view. Ideal to have lots of color samples.
-                "#0078FD",
-                "#0037AC",
-                "#017CFE",
-                "#03AEFE",
-                "#0044C3",
-                "#006CFB",
-                "#003BA9",
-                "#0045BC",
-                "#D2F8FB",
-                "#B4D9FC",
-                "#CAFBFD",
-                "#93D3F8",
-                "#D0FBFA",
-            ],
-        },
-        {
-            "label": "red",
-            "display_color": "#FF0000",
-            "detect_colors": [
-                "#F40700",
-                "#970700",
-                "#8B0600",
-                "#FD9A39",
-                "#FCF491",
-                "#FBBB6D"
-            ],
-        },
-        {
-            "label": "green",
-            "display_color": "#00FF00",
-            "detect_colors": [
-                "#03E572",
-                "#00A04A",
-                "#00914A",
-                "#005829",
-                "#03E773",
-                "#86FABD",
-                "#80D69C",
-                "#9EFBFB",
-                "#74FDDE",
-                "#6DE9B0",
-                "#A1FACA",
-                "#E1FCFC",
-                "#629270",
-                "#7CC091",
-                "#68F7C3",
-                "#F7FDFD",
-                "#E7FBFD",
-                "#C9FCFD"
-            ],
-        },
-    ]
+    {
+        "label": "blue",                   Name for debugging only.
+        "display_color": "#0000FF",        Color for debugging.
+        "detect_colors": [                 Colors used to determine which candle is in view. Ideal to have lots of color samples.
+            "#0078FD",
+            "#0037AC",
+            "#017CFE",
+            "#03AEFE",
+            "#0044C3",
+            "#006CFB",
+            "#003BA9",
+            "#0045BC",
+            "#D2F8FB",
+            "#B4D9FC",
+            "#CAFBFD",
+            "#93D3F8",
+            "#D0FBFA",
+        ],
+    },
+    {
+        "label": "red",
+        "display_color": "#FF0000",
+        "detect_colors": [
+            "#F40700",
+            "#970700",
+            "#8B0600",
+            "#FD9A39",
+            "#FCF491",
+            "#FBBB6D"
+        ],
+    },
+    {
+        "label": "green",
+        "display_color": "#00FF00",
+        "detect_colors": [
+            "#03E572",
+            "#00A04A",
+            "#00914A",
+            "#005829",
+            "#03E773",
+            "#86FABD",
+            "#80D69C",
+            "#9EFBFB",
+            "#74FDDE",
+            "#6DE9B0",
+            "#A1FACA",
+            "#E1FCFC",
+            "#629270",
+            "#7CC091",
+            "#68F7C3",
+            "#F7FDFD",
+            "#E7FBFD",
+            "#C9FCFD"
+        ],
+    },
+]
 ```
 ## Extra Configuration
 `config.ini` *(will appear after first run)*
