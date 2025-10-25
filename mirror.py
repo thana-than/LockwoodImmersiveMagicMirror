@@ -525,6 +525,7 @@ class Candle():
         self.lab_colors = [to_lab((rgb[2], rgb[1], rgb[0])) for rgb in self.detect_colors]
         self.detection = 0
         self.bounds = (0,0,0,0)
+        self.force_detection = False
 
     def get_data(self):
         return {
@@ -572,8 +573,17 @@ class CV2_Sequencer(CV2_Render):
 
     def is_in_sequence(self, candle_index):
         return candle_index in self.current_sequence
+    
+    def debug_toggle_candle(self, candle_index):
+        if candle_index < 0 or candle_index >= len(self.candles):
+            print("Candle at index {candle_index} does not exist!")
+            return
+        
+        candle = self.candles[candle_index]
+        candle.force_detection = not candle.force_detection
+        print("Candle {candle_index} ", "on! " if candle.force_detection else "off!")
 
-    def try_add_to_sequence(self, candle_index):
+    def try_add_to_sequence(self, candle_index):        
         if self.is_in_sequence(candle_index):
             return
         print("ADDED CANDLE " + str(candle_index) + " TO SEQUENCE")
@@ -585,6 +595,7 @@ class CV2_Sequencer(CV2_Render):
         self.state_name = "DETECT"
         self.current_sequence.clear()
         for candle in self.candles:
+            candle.force_detection = False
             candle.detection = 0
 
     def get_sequence_data(self):
@@ -624,7 +635,7 @@ class CV2_Sequencer(CV2_Render):
         for i in range(len(self.candles)):
             candle = self.candles[i]
 
-            visible = candle.bounds != None
+            visible = candle.force_detection or candle.bounds != None
             detect_step = detect_accel if visible else -detect_deccel
 
             candle.detection += delta_time * detect_step
@@ -682,6 +693,7 @@ class CV2_Sequencer(CV2_Render):
         
         if self.queue_clear:
             for candle in self.candles:
+                candle.force_detection = False
                 if candle.detection > 0:
                     return
             self.clear_sequence()
@@ -783,6 +795,17 @@ class App:
             thread.cleanup()
         self.threads.clear()
 
+
+def sequence_listener(sequencer):
+    time.sleep(1)
+    print("Program is running. Enter a number to add a candle.")
+    while True:
+        cmd = input("> ")
+        if cmd.isdigit():
+            sequencer.debug_toggle_candle(int(cmd))
+        else:
+            print(f"Unknown command: {cmd}")
+
 #####* PROGRAM START *#####
 if __name__ == "__main__":
     # setup root window
@@ -796,7 +819,11 @@ if __name__ == "__main__":
     
     app = App(root, size=WINDOW_SIZE)
     
-    app.add(CV2_Sequencer(CAM_DEVICE, x=0,y=0, classifier=model_classifier, candles = load_candles_from_json(json_file)))
+    sequencer = CV2_Sequencer(CAM_DEVICE, x=0,y=0, classifier=model_classifier, candles = load_candles_from_json(json_file))
+    app.add(sequencer)
+
+    listener = threading.Thread(target=sequence_listener, args=(sequencer,), daemon=True)
+    listener.start()
 
     root.mainloop()
 
