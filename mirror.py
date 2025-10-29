@@ -24,7 +24,6 @@ parser.add_argument('-c', '--camera', default=0, help='Index of camera device. D
 parser.add_argument('-d', '--debug', action='store_true', default=False, help='Shows debug frame and detection state. Defaults to False.')
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
 parser.add_argument('-p', '--port', default=5005, help='Port where sequencing data is sent. Useful for external rendering.')
-parser.add_argument('-w', '--window', default=(1920, 1080), nargs=2, metavar=('WIDTH', 'HEIGHT'), help='Set the desired Window Size. Defaults to 1920 1080.')
 parser.add_argument('-m', '--model', default='res/cascade.xml', help='Path to the cascade model used in image detection.')
 args = parser.parse_args()
 
@@ -167,7 +166,6 @@ model_classifier = cv2.CascadeClassifier('res/cascade.xml')
 CAM_DEVICE = int(args.camera) # Index of the camera device thats to be displayed
 DEBUG = args.debug
 FRAMES_PER_SECOND = int(args.fps)
-WINDOW_SIZE = (int(args.window[0]), int(args.window[1]))
 
 detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
 detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
@@ -554,11 +552,8 @@ class CV2_Sequencer(CV2_Render):
 # region Main
 
 class App:
-    def __init__(self, window, size=(320, 240)):
+    def __init__(self, window):
         self.running = True
-
-        self.size = size
-        self.w, self.h = size
 
         self.threads = []
         self.stop_event = threading.Event()
@@ -566,19 +561,36 @@ class App:
         self.hasWindow = window is not None
         if self.hasWindow:
             self.window = window
-            self.canvas = tkinter.Canvas(window, width=self.w, height=self.h, bg="black")
-            self.canvas.pack()
-            self.image_id = self.canvas.create_image(self.w / 2, self.h / 2, anchor=tkinter.CENTER)
+            self.canvas = tkinter.Canvas(window, width=self.window.winfo_reqwidth(), height=self.window.winfo_reqheight(), bg="black")
+            self.width = 1
+            self.height = 1
+            self.canvas.pack(fill="both", expand=True)
+            self.image_id = self.canvas.create_image(self.width / 2, self.height / 2, anchor=tkinter.CENTER)
+            self.canvas.bind("<Configure>", self.on_resize)
             self.window.protocol("WM_DELETE_WINDOW", self.cleanup)
             self.window.bind("<Escape>", lambda e: self.cleanup())
 
         self.update()
+
+    def on_resize(self,event):
+        self.resize(event.x + event.width, event.y + event.height)
+
+    def resize(self, width, height):
+        self.width = width
+        self.height = height
+
+        self.image_id = self.canvas.create_image(self.width / 2, self.height / 2, anchor=tkinter.CENTER)
 
     def add(self, video_render):
         self.validate(video_render)
 
         self.threads.append(video_render)
         video_render.start()
+
+        #* resize to this input if we haven't done a resize yet
+        if self.hasWindow and self.width <= 1 and self.height <= 1:
+            self.window.geometry(f'{video_render.w}x{video_render.h}')
+            self.resize(video_render.w, video_render.h)
 
     def validate(self, video_render):
         video_render.stop_event = self.stop_event
@@ -596,10 +608,8 @@ class App:
         if self.stop_event.is_set():
             return
         
-        base_frame = Image.new('RGBA', (self.w, self.h))
-
-        x_offset = self.w / 2
-        y_offset = self.h / 2
+        if self.hasWindow:
+            base_frame = Image.new('RGBA', (self.width, self.height))
 
         for thread in self.threads:
             try:
@@ -609,17 +619,28 @@ class App:
             except Empty:
                 frame = thread.last_frame
                 
-            if frame is None:
+            if not self.hasWindow or frame is None:
                 continue
             
+            f_height, f_width = frame.shape[:2]
+            scale = min(self.width / f_width, self.height / f_height)
+            new_w, new_h = int(f_width * scale), int(f_height * scale)
+
+            x_offset = (self.width - new_w) // 2
+            y_offset = (self.height - new_h) // 2
+
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
             frame_pil = Image.fromarray(frame)
             if frame.shape[2] == 3:
                 frame_pil = frame_pil.convert('RGBA')
-            base_frame.alpha_composite(frame_pil, dest=(int(x_offset - (thread.w / 2) + thread.x), int(y_offset - (thread.h / 2) + thread.y)))
+                
+            base_frame.alpha_composite(frame_pil, dest=(x_offset, y_offset))
 
         if self.hasWindow:
             self.img = ImageTk.PhotoImage(base_frame)
             self.canvas.itemconfig(self.image_id, image=self.img)
+            #* call next update
             self.window.after(ms_delay, self.update)
         else:
             time.sleep(seconds_delay)
@@ -660,7 +681,7 @@ if __name__ == "__main__":
         window = tkinter.Tk()
         window.title("Videos")
     
-    app = App(window, size=WINDOW_SIZE)
+    app = App(window)
     
     sequencer = CV2_Sequencer(CAM_DEVICE, x=0,y=0, classifier=model_classifier, candles = load_candles_from_json(json_file))
     app.add(sequencer)
