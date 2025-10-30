@@ -154,6 +154,11 @@ config['DETECTION'] = {
     'Detection_VideoScaleFactor': 1.2,
     }
 
+config['STATE'] = {
+    "State_Correct_Min_Clear_Delay": 5.0,
+    "State_Incorrect_Min_Clear_Delay": 2.0,
+}
+
 config.read(config_path)
 
 with open(config_path, 'w') as configfile:
@@ -166,12 +171,19 @@ CAM_DEVICE = int(args.camera) # Index of the camera device thats to be displayed
 DEBUG = args.debug
 ARUCO = args.aruco
 FRAMES_PER_SECOND = int(args.fps)
+class State:
+    DETECT = "DETECT"
+    CORRECT = "CORRECT"
+    INCORRECT = "INCORRECT"
 
 detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
 detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
 
 detection_threshold =  int(config['DETECTION']['Detection_Threshold']) # thresholds that eliminate false positives, lower if detection is spotty
 detection_video_scale_factor = float(config['DETECTION']['Detection_VideoScaleFactor']) # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
+
+state_correct_min_clear_delay = float(config['STATE']['State_Correct_Min_Clear_Delay'])
+state_incorrect_min_clear_delay = float(config['STATE']['State_Incorrect_Min_Clear_Delay'])
 
 seconds_delay = 1.0 / float(FRAMES_PER_SECOND)
 ms_delay = int(seconds_delay * 1000)
@@ -389,22 +401,22 @@ class CV2_Sequencer(CV2_Render):
         self.last_state_change = 0
 
         self.prev_time = time.time()
-        self.detect_time = 0
+        self.queue_clear_wait_time = 0
         self.queue_clear = False
 
-        self.state_name = "DETECT"
+        self.state_name = State.DETECT
 
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
         self.queue_clear = True
-        self.state_name = "INCORRECT"
-        # play_incorrect_video()
+        self.queue_clear_wait_time = state_incorrect_min_clear_delay
+        self.state_name = State.INCORRECT
 
     def correct_response(self):
         print("SEQUENCE CORRECT")
         self.queue_clear = True
-        self.state_name = "CORRECT"
-        # play_correct_video()
+        self.queue_clear_wait_time = state_correct_min_clear_delay
+        self.state_name = State.CORRECT
 
     def is_in_sequence(self, candle_index):
         return candle_index in self.current_sequence
@@ -428,7 +440,8 @@ class CV2_Sequencer(CV2_Render):
     def clear_sequence(self):
         print("DETECT STATE")
         self.queue_clear = False
-        self.state_name = "DETECT"
+        self.queue_clear_wait_time = 0
+        self.state_name = State.DETECT
         self.current_sequence.clear()
         for candle in self.candles:
             candle.force_detection = False
@@ -526,6 +539,17 @@ class CV2_Sequencer(CV2_Render):
             display_color = self.candles[self.current_sequence[i]].display_color
             cv2.circle(video_frame, center=(50 + spacing, 50), radius=20, color=(display_color[2], display_color[1], display_color[0]), thickness=-1)
 
+
+        match self.state_name:
+            case State.CORRECT:
+                text_color = (0,255,0)
+            case State.INCORRECT:
+                text_color = (0,0,255)
+            case _:
+                text_color = (255, 255, 255)  # BGR
+
+        cv2.putText(video_frame, self.state_name, (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, text_color, 2, cv2.LINE_AA)
+
     def upload_state(self):
         candle_data = [c.get_data() for c in self.candles]
         sequence_data = self.get_sequence_data()
@@ -546,18 +570,28 @@ class CV2_Sequencer(CV2_Render):
         self.candle_detection_step(delta_time)
 
         self.debug_draw_detected_candles(video_frame, self.candles)
+        self.debug_draw_sequence_state(video_frame)
         
         if self.queue_clear:
+            can_clear = True
+
+            # minimum wait time
+            if self.queue_clear_wait_time > 0:
+                self.queue_clear_wait_time -= delta_time
+                can_clear = False
+
+            # dont end until candles leave view
             for candle in self.candles:
-                if candle.force_detection:
-                    candle.detection = 1.0
-                    candle.force_detection = False
+                candle.force_detection = False
                 if candle.detection > 0:
-                    return
+                    can_clear = False
+            
+            if not can_clear:
+                return
+            
             self.clear_sequence()
 
         self.candle_sequence_step()
-        self.debug_draw_sequence_state(video_frame)
         self.upload_state()
 
     def post_process_frame(self, video_frame):
