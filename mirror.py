@@ -702,12 +702,14 @@ if __name__ == "__main__":
     window = None
     # print opening message
     print(f'{PROJECT_NAME}. Created by Than.\nCamera Device: {CAM_DEVICE}\nFPS: {FRAMES_PER_SECOND}')
+    if ARUCO:
+        print('ARUCO marker mode active')
     if DEBUG:
         print('Debug mode active')
         # setup root window
         window = tkinter.Tk()
         window.title("Videos")
-    
+
     app = App(window)
     
     sequencer = CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file))
