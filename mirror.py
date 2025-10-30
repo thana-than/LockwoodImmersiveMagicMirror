@@ -25,6 +25,7 @@ parser.add_argument('-d', '--debug', action='store_true', default=False, help='S
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
 parser.add_argument('-p', '--port', default=5005, help='Port where sequencing data is sent. Useful for external rendering.')
 parser.add_argument('-m', '--model', default='res/cascade.xml', help='Path to the cascade model used in image detection.')
+parser.add_argument('-a', '--aruco', action='store_true', default=False, help='Use aruco marker mode instead of image detection model.')
 args = parser.parse_args()
 
 # endregion
@@ -161,10 +162,9 @@ with open(config_path, 'w') as configfile:
 # endregion
 
 # region Fields and Variables
-model_classifier = cv2.CascadeClassifier('res/cascade.xml')
-
 CAM_DEVICE = int(args.camera) # Index of the camera device thats to be displayed
 DEBUG = args.debug
+ARUCO = args.aruco
 FRAMES_PER_SECOND = int(args.fps)
 
 detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
@@ -176,6 +176,13 @@ detection_video_scale_factor = float(config['DETECTION']['Detection_VideoScaleFa
 seconds_delay = 1.0 / float(FRAMES_PER_SECOND)
 ms_delay = int(seconds_delay * 1000)
 app = None
+
+if ARUCO:
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    aruco_parameters = cv2.aruco.DetectorParameters()
+    aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_parameters)
+else:
+    model_classifier = cv2.CascadeClassifier('res/cascade.xml')
 
 # endregion
 
@@ -364,7 +371,7 @@ class CV2_Render(Video_Render):
 # region Candle Sequencing
 
 class CV2_Sequencer(CV2_Render):
-    def __init__(self, source, x = 0, y = 0, classifier = model_classifier, candles = []):
+    def __init__(self, source, x = 0, y = 0, candles = []):
         super().__init__(source, x, y)
 
         self.candles = candles
@@ -386,7 +393,6 @@ class CV2_Sequencer(CV2_Render):
         self.queue_clear = False
 
         self.state_name = "DETECT"
-        self.classifier = classifier
 
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
@@ -445,8 +451,8 @@ class CV2_Sequencer(CV2_Render):
             return None
         return self.candles[self.candles_lab_index[i]]
 
-    def update_candle_bounds(self, video_frame):
-        bounds_collection = detect_bounding_box(video_frame, self.classifier)  # apply the function we created to the video frame 
+    def model_update_candle_bounds(self, video_frame):
+        bounds_collection = detect_bounding_box(video_frame, model_classifier)  # apply the function we created to the video frame 
 
         for candle in self.candles:
             candle.bounds = None
@@ -459,6 +465,24 @@ class CV2_Sequencer(CV2_Render):
             candle = self.find_closest_candle(avg_color)
             if candle:
                 candle.bounds = bounds
+
+    def aruco_update_candle_bounds(self, video_frame):
+        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
+
+        corners, ids, rejected = aruco_detector.detectMarkers(in_color)
+
+        for candle in self.candles:
+            candle.bounds = None
+
+        if ids is None:
+            return
+        
+        ids = ids.flatten()
+        for id, candle in enumerate(self.candles):
+            if id in ids:
+                idx = list(ids).index(id)
+                pts = corners[idx].reshape((4, 2)).astype(int)
+                candle.bounds = cv2.boundingRect(pts)
 
     def candle_detection_step(self, delta_time):                
         for i in range(len(self.candles)):
@@ -514,7 +538,10 @@ class CV2_Sequencer(CV2_Render):
         return
 
     def sequence_update(self, video_frame, delta_time):
-        self.update_candle_bounds(video_frame)
+        if ARUCO:
+            self.aruco_update_candle_bounds(video_frame)
+        else:
+            self.model_update_candle_bounds(video_frame)
 
         self.candle_detection_step(delta_time)
 
@@ -683,7 +710,7 @@ if __name__ == "__main__":
     
     app = App(window)
     
-    sequencer = CV2_Sequencer(CAM_DEVICE, x=0,y=0, classifier=model_classifier, candles = load_candles_from_json(json_file))
+    sequencer = CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file))
     app.add(sequencer)
 
     signal.signal(signal.SIGINT, handle_exitsignal)
