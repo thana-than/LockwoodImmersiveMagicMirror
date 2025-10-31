@@ -24,7 +24,7 @@ parser.add_argument('-c', '--camera', default=0, help='Index of camera device. D
 parser.add_argument('-d', '--debug', action='store_true', default=False, help='Shows debug frame and detection state. Defaults to False.')
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
 parser.add_argument('-p', '--port', default=5005, help='Port where sequencing data is sent. Useful for external rendering.')
-parser.add_argument('-m', '--model', default='models/cascade_9.xml', help='Path to the cascade model used in image detection.')
+parser.add_argument('-m', '--model', default='models/cascade_9.xml', help='Path to the cascade model used in image detection. Defaults to "models/cascade_9.xml"')
 parser.add_argument('-a', '--aruco', action='store_true', default=False, help='Use aruco marker mode instead of image detection model.')
 args = parser.parse_args()
 

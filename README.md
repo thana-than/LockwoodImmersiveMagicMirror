@@ -42,7 +42,7 @@ python mirror.py --debug
   -d, --debug                               Shows debug frame and detection state. Defaults to False.
   -f FPS, --fps FPS                         Set the desired Frames Per Second. Defaults to 30.
   -p PORT, --port PORT                      Port where sequencing data is sent. Useful for external rendering.
-  -m MODEL, --model MODEL                   Path to the cascade model used in image detection.
+  -m MODEL, --model MODEL                   Path to the cascade model used in image detection. Defaults to "models/cascade_9.xml"
   -a, --aruco                               Use aruco marker mode instead of image detection model.
    ```
 ## Json Configuration
