@@ -4,6 +4,9 @@ candles.json
 train_model.json
 training_data
 svm_model.xml
+local
+renderer
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
