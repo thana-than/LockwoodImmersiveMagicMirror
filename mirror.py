@@ -1,3 +1,4 @@
+import signal
 import cv2
 import time
 import argparse
@@ -13,8 +14,6 @@ import socket
 
 PROJECT_NAME = 'Magic Mirror'
 
-#TODO clean up
-
 # region Argument Parsing
 
 parser = argparse.ArgumentParser(
@@ -25,8 +24,8 @@ parser.add_argument('-c', '--camera', default=0, help='Index of camera device. D
 parser.add_argument('-d', '--debug', action='store_true', default=False, help='Shows debug frame and detection state. Defaults to False.')
 parser.add_argument('-f', '--fps', default=30, help='Set the desired Frames Per Second. Defaults to 30.')
 parser.add_argument('-p', '--port', default=5005, help='Port where sequencing data is sent. Useful for external rendering.')
-parser.add_argument('-w', '--window', default=(1920, 1080), nargs=2, metavar=('WIDTH', 'HEIGHT'), help='Set the desired Window Size. Defaults to 1920 1080.')
 parser.add_argument('-m', '--model', default='res/cascade.xml', help='Path to the cascade model used in image detection.')
+parser.add_argument('-a', '--aruco', action='store_true', default=False, help='Use aruco marker mode instead of image detection model.')
 args = parser.parse_args()
 
 # endregion
@@ -110,11 +109,6 @@ DEFAULT_JSON_DATA =[
 
 json_file = 'candles.json'
 
-def write_default_json(path):
-    with open(path, 'w') as f:
-        json.dump(DEFAULT_JSON_DATA, f, indent=4)
-    return DEFAULT_JSON_DATA
-
 def validate_json(data):
     for i in range(len(data)):
         schema = DEFAULT_JSON_SCHEMA
@@ -160,6 +154,11 @@ config['DETECTION'] = {
     'Detection_VideoScaleFactor': 1.2,
     }
 
+config['STATE'] = {
+    "State_Correct_Min_Clear_Delay": 5.0,
+    "State_Incorrect_Min_Clear_Delay": 2.0,
+}
+
 config.read(config_path)
 
 with open(config_path, 'w') as configfile:
@@ -168,11 +167,14 @@ with open(config_path, 'w') as configfile:
 # endregion
 
 # region Fields and Variables
-
 CAM_DEVICE = int(args.camera) # Index of the camera device thats to be displayed
 DEBUG = args.debug
+ARUCO = args.aruco
 FRAMES_PER_SECOND = int(args.fps)
-WINDOW_SIZE = (int(args.window[0]), int(args.window[1]))
+class State:
+    DETECT = "DETECT"
+    CORRECT = "CORRECT"
+    INCORRECT = "INCORRECT"
 
 detect_accel = float(config['DETECTION']['Detection_Build_Speed']) # how fast the face state is registered
 detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast the face state is deregistered
@@ -180,32 +182,23 @@ detect_deccel = float(config['DETECTION']['Detection_Reduce_Speed']) # how fast 
 detection_threshold =  int(config['DETECTION']['Detection_Threshold']) # thresholds that eliminate false positives, lower if detection is spotty
 detection_video_scale_factor = float(config['DETECTION']['Detection_VideoScaleFactor']) # reduce image size for optimization (1 / VIDEO_SCALE_FACTOR = scale percentage)
 
-clock_overlay = cv2.imread('res/clock.png', cv2.IMREAD_UNCHANGED)
-check_overlay = cv2.imread('res/check.png', cv2.IMREAD_UNCHANGED)
+state_correct_min_clear_delay = float(config['STATE']['State_Correct_Min_Clear_Delay'])
+state_incorrect_min_clear_delay = float(config['STATE']['State_Incorrect_Min_Clear_Delay'])
 
-correct_video_filename = 'res/sequence_correct.mp4'
-incorrect_video_filename = 'res/sequence_incorrect.mp4'
-video_colorkey = '#00FF00'
-bounds_min = 500
-
-orb = cv2.ORB_create(nfeatures=1000)
-bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-ms_delay = int(1.0 / float(FRAMES_PER_SECOND) * 1000)
-
-# face_classifier = cv2.CascadeClassifier(
-#     cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-# )
-
-
-model_classifier = cv2.CascadeClassifier('res/cascade.xml')
+seconds_delay = 1.0 / float(FRAMES_PER_SECOND)
+ms_delay = int(seconds_delay * 1000)
 app = None
+
+if ARUCO:
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+    aruco_parameters = cv2.aruco.DetectorParameters()
+    aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_parameters)
+else:
+    model_classifier = cv2.CascadeClassifier('res/cascade.xml')
 
 # endregion
 
 # region Methods
-
-
 
 def to_lab(bgr):
     bgr = numpy.uint8([[bgr]])
@@ -256,49 +249,6 @@ def sample_color_in_bounds(video_frame, bounds): #, brightness_threshold=210):
     avg_color = numpy.mean(roi, axis=(0,1))
     return avg_color.astype(int).tolist()
 
-def find_orb_bounds(kp_template, des_template, kp_frame, des_frame, match_dist = 50, match_threshold = 10):
-    if des_frame is not None and len(des_frame) > 0:
-        matches = bf.match(des_template, des_frame)
-        matches = sorted(matches, key=lambda x: x.distance)
-
-        # Keep only "good" matches (distance < threshold)
-        good_matches = [m for m in matches if m.distance < match_dist]
-
-        # match_ratio = len(good_matches) / len(matches)
-
-        if len(good_matches) > match_threshold:
-            # print(str(match_ratio)) 
-            # Build point arrays
-            src_pts = numpy.float32([kp_template[m.queryIdx].pt for m in good_matches]).reshape(-1,1,2)
-            dst_pts = numpy.float32([kp_frame[m.trainIdx].pt for m in good_matches]).reshape(-1,1,2)
-
-            # Homography
-            M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-            if M is not None:
-                x, y, w, h = cv2.boundingRect(numpy.int32(dst_pts))
-
-                if w*h > bounds_min:
-                    return (x,y,w,h)
-
-    return None
-
-def find_color_bounds(in_color, low, high):
-    # Threshold on brightness (tune values)
-    mask = cv2.inRange(in_color, low, high)
-
-    # Morphology to clean up
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, numpy.ones((5,5), numpy.uint8))
-
-    # Find contours
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    for c in contours:
-        x,y,w,h = cv2.boundingRect(c)
-        if w*h > bounds_min:  # filter small noise
-            return (x,y,w,h)
-
-    return None
-
 def debug_draw_rect_bounds_rgb(video_frame, bounds, draw_color):
     debug_draw_rect_bounds_bgr(video_frame, bounds, (draw_color[2], draw_color[1], draw_color[0]))
 
@@ -311,64 +261,25 @@ def debug_draw_rect_bounds_bgr(video_frame, bounds, draw_color):
     h = bounds[3]
     cv2.rectangle(video_frame, (x,y), (x+w,y+h), draw_color, 2)
 
-def face_detected_update(video_frame, faces):
-    return video_frame
-
-def play_correct_video():
-    video = CV2_Render(correct_video_filename)
-    video.set_color_key(video_colorkey)
-    app.add(video)
-    return
-
-def play_incorrect_video():
-    video = CV2_Render(incorrect_video_filename)
-    video.set_color_key(video_colorkey)
-    app.add(video)
-    return
-
-def on_face_state_change(face_state):
-    return
-
-def debug_draw_detection(video_frame, items):
-    if DEBUG is False:
-        return video_frame
-    for bounds in items:
-        x,y,w,h = bounds
-        cv2.rectangle(video_frame, (x, y), (x + w, y + h), (0, 255, 0), 4)
-    return video_frame
-
-def debug_draw_overlay(overlay_image, video_frame):
-    if DEBUG is False:
-        return video_frame
-    
-    # Resize overlay if needed
-    scale = 0.2  # 20% of original size
-    overlay_resized = cv2.resize(
-        overlay_image, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA
-    )
-
-    oh, ow = overlay_resized.shape[:2]
-    vh, vw = video_frame.shape[:2]
-
-    # Position: bottom-right
-    x, y = vw - ow, vh - oh
-
-    if overlay_resized.shape[2] == 4:
-        # If overlay has alpha channel
-        alpha = overlay_resized[:, :, 3] / 255.0
-        for c in range(0, 3):
-            video_frame[y:vh, x:vw, c] = (
-                alpha * overlay_resized[:, :, c]
-                + (1 - alpha) * video_frame[y:vh, x:vw, c]
-            )
-    else:
-        # No alpha channel, just overwrite
-        video_frame[y:vh, x:vw] = overlay_resized
-
-    return video_frame
-
 def clamp(n, smallest, largest): return max(smallest, min(n, largest)) 
 
+# endregion
+
+# region Candle Class
+class Candle():
+    def __init__(self, display_color, detect_colors):
+        self.display_color = ImageColor.getcolor(display_color, "RGB")
+        self.detect_colors = [ImageColor.getcolor(color, "RGB") for color in detect_colors]
+        self.lab_colors = [to_lab((rgb[2], rgb[1], rgb[0])) for rgb in self.detect_colors]
+        self.detection = 0
+        self.bounds = (0,0,0,0)
+        self.force_detection = False
+
+    def get_data(self):
+        return {
+            "detection" : self.detection,
+            "bounds" : self.bounds
+        }      
 # endregion
 
 # region Render Thread Classes
@@ -468,74 +379,11 @@ class CV2_Render(Video_Render):
     def cleanup(self):
         super().cleanup()
         self.video_capture.release()
-        
-
-class CV2_Detection(CV2_Render):    
-    def __init__(self, source, x = 0, y = 0, classifier = model_classifier):
-        super().__init__(source, x, y)
-        self.prev_time = time.time()
-        self.detect_time = 0
-        self.face_state = False
-        self.classifier = classifier
-
-    def post_process_frame(self, video_frame):
-        current_time = time.time()
-        delta_time = current_time - self.prev_time
-        self.prev_time = current_time
-
-        faces = detect_bounding_box(video_frame, self.classifier)  # apply the function we created to the video frame 
-        items = faces# + candles
-        video_frame = debug_draw_detection(video_frame, items)
-
-        # detection threshold
-        detect_step = detect_accel if len(items) > 0 else -detect_deccel 
-
-        self.detect_time += delta_time * detect_step
-        self.detect_time = clamp(self.detect_time, 0.0, 1.0)
-
-        # face state assignment
-        current_face_state = self.face_state
-        if (self.detect_time == 0.0):
-            current_face_state = False
-        elif (self.detect_time == 1.0):
-            current_face_state = True
-
-        if self.face_state != current_face_state:
-            self.face_state = current_face_state
-            on_face_state_change(current_face_state)
-
-        # face state update methods
-        if (current_face_state): #detected
-            video_frame = face_detected_update(video_frame, items)
-            video_frame = debug_draw_overlay(check_overlay, video_frame)
-        elif (detect_step > 0): # charging up
-            video_frame = debug_draw_overlay(clock_overlay, video_frame)
-
-        if DEBUG:
-            return super().post_process_frame(video_frame)
-        else:
-            return None # hide frame if not debugging
     
 # region Candle Sequencing
 
-class Candle():
-    def __init__(self, display_color, detect_colors):
-        self.display_color = ImageColor.getcolor(display_color, "RGB")
-        self.detect_colors = [ImageColor.getcolor(color, "RGB") for color in detect_colors]
-        self.lab_colors = [to_lab((rgb[2], rgb[1], rgb[0])) for rgb in self.detect_colors]
-        self.detection = 0
-        self.bounds = (0,0,0,0)
-        self.force_detection = False
-
-    def get_data(self):
-        return {
-            "detection" : self.detection,
-            "bounds" : self.bounds
-        }
-        
-
 class CV2_Sequencer(CV2_Render):
-    def __init__(self, source, x = 0, y = 0, classifier = model_classifier, candles = []):
+    def __init__(self, source, x = 0, y = 0, candles = []):
         super().__init__(source, x, y)
 
         self.candles = candles
@@ -553,23 +401,22 @@ class CV2_Sequencer(CV2_Render):
         self.last_state_change = 0
 
         self.prev_time = time.time()
-        self.detect_time = 0
+        self.queue_clear_wait_time = 0
         self.queue_clear = False
 
-        self.state_name = "DETECT"
-        self.classifier = classifier
+        self.state_name = State.DETECT
 
     def incorrect_response(self):
         print("SEQUENCE " + ",".join(map(str, self.current_sequence)) + " INCORRECT")
         self.queue_clear = True
-        self.state_name = "INCORRECT"
-        play_incorrect_video()
+        self.queue_clear_wait_time = state_incorrect_min_clear_delay
+        self.state_name = State.INCORRECT
 
     def correct_response(self):
         print("SEQUENCE CORRECT")
         self.queue_clear = True
-        self.state_name = "CORRECT"
-        play_correct_video()
+        self.queue_clear_wait_time = state_correct_min_clear_delay
+        self.state_name = State.CORRECT
 
     def is_in_sequence(self, candle_index):
         return candle_index in self.current_sequence
@@ -591,8 +438,10 @@ class CV2_Sequencer(CV2_Render):
         self.process_sequence_state()
 
     def clear_sequence(self):
+        print("DETECT STATE")
         self.queue_clear = False
-        self.state_name = "DETECT"
+        self.queue_clear_wait_time = 0
+        self.state_name = State.DETECT
         self.current_sequence.clear()
         for candle in self.candles:
             candle.force_detection = False
@@ -603,7 +452,6 @@ class CV2_Sequencer(CV2_Render):
             "order": self.current_sequence,
             "state": self.state_name,
         }
-    
     
     def find_closest_candle(self, input_color):
         # finds the closest candle lab color to the input_color and returns that specific candle
@@ -616,8 +464,8 @@ class CV2_Sequencer(CV2_Render):
             return None
         return self.candles[self.candles_lab_index[i]]
 
-    def update_candle_bounds(self, video_frame):
-        bounds_collection = detect_bounding_box(video_frame, self.classifier)  # apply the function we created to the video frame 
+    def model_update_candle_bounds(self, video_frame):
+        bounds_collection = detect_bounding_box(video_frame, model_classifier)  # apply the function we created to the video frame 
 
         for candle in self.candles:
             candle.bounds = None
@@ -630,6 +478,24 @@ class CV2_Sequencer(CV2_Render):
             candle = self.find_closest_candle(avg_color)
             if candle:
                 candle.bounds = bounds
+
+    def aruco_update_candle_bounds(self, video_frame):
+        in_color = cv2.cvtColor(video_frame, cv2.COLOR_BGR2GRAY)
+
+        corners, ids, rejected = aruco_detector.detectMarkers(in_color)
+
+        for candle in self.candles:
+            candle.bounds = None
+
+        if ids is None:
+            return
+        
+        ids = ids.flatten()
+        for id, candle in enumerate(self.candles):
+            if id in ids:
+                idx = list(ids).index(id)
+                pts = corners[idx].reshape((4, 2)).astype(int)
+                candle.bounds = cv2.boundingRect(pts)
 
     def candle_detection_step(self, delta_time):                
         for i in range(len(self.candles)):
@@ -673,6 +539,17 @@ class CV2_Sequencer(CV2_Render):
             display_color = self.candles[self.current_sequence[i]].display_color
             cv2.circle(video_frame, center=(50 + spacing, 50), radius=20, color=(display_color[2], display_color[1], display_color[0]), thickness=-1)
 
+
+        match self.state_name:
+            case State.CORRECT:
+                text_color = (0,255,0)
+            case State.INCORRECT:
+                text_color = (0,0,255)
+            case _:
+                text_color = (255, 255, 255)  # BGR
+
+        cv2.putText(video_frame, self.state_name, (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, text_color, 2, cv2.LINE_AA)
+
     def upload_state(self):
         candle_data = [c.get_data() for c in self.candles]
         sequence_data = self.get_sequence_data()
@@ -685,21 +562,36 @@ class CV2_Sequencer(CV2_Render):
         return
 
     def sequence_update(self, video_frame, delta_time):
-        self.update_candle_bounds(video_frame)
+        if ARUCO:
+            self.aruco_update_candle_bounds(video_frame)
+        else:
+            self.model_update_candle_bounds(video_frame)
 
         self.candle_detection_step(delta_time)
 
         self.debug_draw_detected_candles(video_frame, self.candles)
+        self.debug_draw_sequence_state(video_frame)
         
         if self.queue_clear:
+            can_clear = True
+
+            # minimum wait time
+            if self.queue_clear_wait_time > 0:
+                self.queue_clear_wait_time -= delta_time
+                can_clear = False
+
+            # dont end until candles leave view
             for candle in self.candles:
                 candle.force_detection = False
                 if candle.detection > 0:
-                    return
+                    can_clear = False
+            
+            if not can_clear:
+                return
+            
             self.clear_sequence()
 
         self.candle_sequence_step()
-        self.debug_draw_sequence_state(video_frame)
         self.upload_state()
 
     def post_process_frame(self, video_frame):
@@ -721,29 +613,45 @@ class CV2_Sequencer(CV2_Render):
 # region Main
 
 class App:
-    def __init__(self, root, size=(320, 240)):
-        self.root = root
+    def __init__(self, window):
+        self.running = True
+
+        self.threads = []
         self.stop_event = threading.Event()
 
-        self.size = size
-        self.w, self.h = size
-        self.canvas = tkinter.Canvas(root, width=self.w, height=self.h, bg="black")
-        self.canvas.pack()
-
-        self.image_id = self.canvas.create_image(self.w / 2, self.h / 2, anchor=tkinter.CENTER)
-
-        # threads
-        self.threads = []
+        self.hasWindow = window is not None
+        if self.hasWindow:
+            self.window = window
+            self.canvas = tkinter.Canvas(window, width=self.window.winfo_reqwidth(), height=self.window.winfo_reqheight(), bg="black")
+            self.width = 1
+            self.height = 1
+            self.canvas.pack(fill="both", expand=True)
+            self.image_id = self.canvas.create_image(self.width / 2, self.height / 2, anchor=tkinter.CENTER)
+            self.canvas.bind("<Configure>", self.on_resize)
+            self.window.protocol("WM_DELETE_WINDOW", self.cleanup)
+            self.window.bind("<Escape>", lambda e: self.cleanup())
 
         self.update()
-        self.root.protocol("WM_DELETE_WINDOW", self.cleanup)
-        self.root.bind("<Escape>", lambda e: self.cleanup())
+
+    def on_resize(self,event):
+        self.resize(event.x + event.width, event.y + event.height)
+
+    def resize(self, width, height):
+        self.width = width
+        self.height = height
+
+        self.image_id = self.canvas.create_image(self.width / 2, self.height / 2, anchor=tkinter.CENTER)
 
     def add(self, video_render):
         self.validate(video_render)
 
         self.threads.append(video_render)
         video_render.start()
+
+        #* resize to this input if we haven't done a resize yet
+        if self.hasWindow and self.width <= 1 and self.height <= 1:
+            self.window.geometry(f'{video_render.w}x{video_render.h}')
+            self.resize(video_render.w, video_render.h)
 
     def validate(self, video_render):
         video_render.stop_event = self.stop_event
@@ -761,10 +669,8 @@ class App:
         if self.stop_event.is_set():
             return
         
-        base_frame = Image.new('RGBA', (self.w, self.h))
-
-        x_offset = self.w / 2
-        y_offset = self.h / 2
+        if self.hasWindow:
+            base_frame = Image.new('RGBA', (self.width, self.height))
 
         for thread in self.threads:
             try:
@@ -774,23 +680,37 @@ class App:
             except Empty:
                 frame = thread.last_frame
                 
-            if frame is None:
+            if not self.hasWindow or frame is None:
                 continue
             
+            f_height, f_width = frame.shape[:2]
+            scale = min(self.width / f_width, self.height / f_height)
+            new_w, new_h = int(f_width * scale), int(f_height * scale)
+
+            x_offset = (self.width - new_w) // 2
+            y_offset = (self.height - new_h) // 2
+
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
             frame_pil = Image.fromarray(frame)
             if frame.shape[2] == 3:
                 frame_pil = frame_pil.convert('RGBA')
-            base_frame.alpha_composite(frame_pil, dest=(int(x_offset - (thread.w / 2) + thread.x), int(y_offset - (thread.h / 2) + thread.y)))
+                
+            base_frame.alpha_composite(frame_pil, dest=(x_offset, y_offset))
 
-            
-        self.img = ImageTk.PhotoImage(base_frame)
-        self.canvas.itemconfig(self.image_id, image=self.img)
-
-        self.root.after(ms_delay, self.update)
+        if self.hasWindow:
+            self.img = ImageTk.PhotoImage(base_frame)
+            self.canvas.itemconfig(self.image_id, image=self.img)
+            #* call next update
+            self.window.after(ms_delay, self.update)
+        else:
+            time.sleep(seconds_delay)
 
     def cleanup(self):
+        self.running = False
         self.stop_event.set()
-        self.root.destroy()
+        if self.hasWindow:
+            self.window.destroy()
         for thread in self.threads:
             thread.cleanup()
         self.threads.clear()
@@ -806,25 +726,36 @@ def sequence_listener(sequencer):
         else:
             print(f"Unknown command: {cmd}")
 
+def handle_exitsignal(sig, frame):
+    print('')
+    app.cleanup()
+    exit(0)
+
 #####* PROGRAM START *#####
 if __name__ == "__main__":
-    # setup root window
-    root = tkinter.Tk()
-    root.title("Videos")
-
+    window = None
     # print opening message
     print(f'{PROJECT_NAME}. Created by Than.\nCamera Device: {CAM_DEVICE}\nFPS: {FRAMES_PER_SECOND}')
+    if ARUCO:
+        print('ARUCO marker mode active')
     if DEBUG:
         print('Debug mode active')
+        # setup root window
+        window = tkinter.Tk()
+        window.title("Videos")
+
+    app = App(window)
     
-    app = App(root, size=WINDOW_SIZE)
-    
-    sequencer = CV2_Sequencer(CAM_DEVICE, x=0,y=0, classifier=model_classifier, candles = load_candles_from_json(json_file))
+    sequencer = CV2_Sequencer(CAM_DEVICE, x=0,y=0, candles = load_candles_from_json(json_file))
     app.add(sequencer)
 
+    signal.signal(signal.SIGINT, handle_exitsignal)
     listener = threading.Thread(target=sequence_listener, args=(sequencer,), daemon=True)
     listener.start()
 
-    root.mainloop()
-
+    if window is not None:
+        window.mainloop()
+    else:
+        while app.running:
+            time.sleep(seconds_delay)
 # endregion

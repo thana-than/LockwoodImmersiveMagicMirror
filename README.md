@@ -42,8 +42,8 @@ python mirror.py --debug
   -d, --debug                               Shows debug frame and detection state. Defaults to False.
   -f FPS, --fps FPS                         Set the desired Frames Per Second. Defaults to 30.
   -p PORT, --port PORT                      Port where sequencing data is sent. Useful for external rendering.
-  -w WIDTH HEIGHT, --window WIDTH HEIGHT    Set the desired Window Size. Defaults to 1920 1080.
   -m MODEL, --model MODEL                   Path to the cascade model used in image detection.
+  -a, --aruco                               Use aruco marker mode instead of image detection model.
    ```
 ## Json Configuration
 Array is in order of correct candle sequence. </br>
